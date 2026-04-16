@@ -29,6 +29,7 @@ export interface SharedData {
     name: string;
     quote: { message: string; author: string };
     auth: Auth;
+    locale: 'en' | 'pt';
     flash: Flash;
     [key: string]: unknown;
 }

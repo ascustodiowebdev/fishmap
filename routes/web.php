@@ -1,12 +1,23 @@
 <?php
 
 use App\Http\Controllers\CatchLogController;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 Route::get('/', function () {
     return Inertia::render('welcome');
 })->name('home');
+
+Route::post('locale', function (Request $request) {
+    $validated = $request->validate([
+        'locale' => ['required', 'in:en,pt'],
+    ]);
+
+    $request->session()->put('locale', $validated['locale']);
+
+    return back();
+})->name('locale.update');
 
 Route::middleware(['auth'])->group(function () {
     Route::get('dashboard', [CatchLogController::class, 'index'])->name('dashboard');

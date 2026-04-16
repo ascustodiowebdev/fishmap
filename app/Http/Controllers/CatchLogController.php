@@ -69,7 +69,7 @@ class CatchLogController extends Controller
 
         return redirect()
             ->route('dashboard')
-            ->with('success', 'Catch saved to Fishmap.');
+            ->with('success', __('messages.catch_saved'));
     }
 
     public function update(Request $request, CatchLog $catchLog): RedirectResponse
@@ -82,7 +82,7 @@ class CatchLogController extends Controller
 
         return redirect()
             ->route('dashboard')
-            ->with('success', 'Catch updated.');
+            ->with('success', __('messages.catch_updated'));
     }
 
     public function destroy(CatchLog $catchLog): RedirectResponse
@@ -93,7 +93,7 @@ class CatchLogController extends Controller
 
         return redirect()
             ->route('dashboard')
-            ->with('success', 'Catch deleted.');
+            ->with('success', __('messages.catch_deleted'));
     }
 
     /**
