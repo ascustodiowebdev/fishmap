@@ -2,36 +2,36 @@ import { NavFooter } from '@/components/nav-footer';
 import { NavMain } from '@/components/nav-main';
 import { NavUser } from '@/components/nav-user';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
+import { useTranslator } from '@/lib/i18n';
 import { type NavItem } from '@/types';
 import { Link } from '@inertiajs/react';
-import { LayoutGrid, MapPinned } from 'lucide-react';
+import { Home, MapPinned } from 'lucide-react';
 import AppLogo from './app-logo';
-
-const mainNavItems: NavItem[] = [
-    {
-        title: 'Dashboard',
-        url: '/dashboard',
-        icon: LayoutGrid,
-    },
-    {
-        title: 'Catches',
-        url: '/dashboard',
-        icon: MapPinned,
-    },
-];
 
 const footerNavItems: NavItem[] = [];
 
 export function AppSidebar() {
+    const { t } = useTranslator();
+    const mainNavItems: NavItem[] = [
+        {
+            title: 'Home',
+            url: '/',
+            icon: Home,
+        },
+        {
+            title: t('app.catches'),
+            url: '/dashboard',
+            icon: MapPinned,
+        },
+    ];
+
     return (
         <Sidebar collapsible="icon" variant="inset">
             <SidebarHeader>
                 <SidebarMenu>
                     <SidebarMenuItem>
-                        <SidebarMenuButton size="lg" asChild>
-                            <Link href="/dashboard" prefetch>
-                                <AppLogo />
-                            </Link>
+                        <SidebarMenuButton size="lg">
+                            <AppLogo />
                         </SidebarMenuButton>
                     </SidebarMenuItem>
                 </SidebarMenu>
