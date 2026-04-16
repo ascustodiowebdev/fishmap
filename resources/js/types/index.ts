@@ -44,7 +44,9 @@ export interface CatchLog {
     caught_at: string | null;
     latitude: string | null;
     longitude: string | null;
-    visibility: 'private' | 'friends' | 'public';
+    visibility: 'private' | 'public';
+    owner_name?: string | null;
+    is_owner?: boolean;
     created_at: string;
 }
 

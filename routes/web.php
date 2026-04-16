@@ -11,6 +11,8 @@ Route::get('/', function () {
 Route::middleware(['auth'])->group(function () {
     Route::get('dashboard', [CatchLogController::class, 'index'])->name('dashboard');
     Route::post('catch-logs', [CatchLogController::class, 'store'])->name('catch-logs.store');
+    Route::put('catch-logs/{catchLog}', [CatchLogController::class, 'update'])->name('catch-logs.update');
+    Route::delete('catch-logs/{catchLog}', [CatchLogController::class, 'destroy'])->name('catch-logs.destroy');
 });
 
 require __DIR__.'/settings.php';

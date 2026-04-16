@@ -1,6 +1,9 @@
 import { type CatchLog } from '@/types';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleMarker, MapContainer, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import L, { DivIcon } from 'leaflet';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { Fish } from 'lucide-react';
 
 interface CatchMapProps {
     catchLogs: CatchLog[];
@@ -10,10 +13,14 @@ interface CatchMapProps {
     onInteractionChange: (isInteracting: boolean) => void;
     recenterToCurrentSignal: number;
     onInitialLoadChange: (isLoading: boolean) => void;
+    onLongPress: (position: [number, number]) => void;
+    onEditCatch: (catchLog: CatchLog) => void;
+    onDeleteCatch: (catchLog: CatchLog) => void;
 }
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
 const satelliteKey = import.meta.env.VITE_MAPTILER_KEY;
+const fishPinIcon = createFishPinIcon();
 
 export function CatchMap({
     catchLogs,
@@ -23,6 +30,9 @@ export function CatchMap({
     onInteractionChange,
     recenterToCurrentSignal,
     onInitialLoadChange,
+    onLongPress,
+    onEditCatch,
+    onDeleteCatch,
 }: CatchMapProps) {
     const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(null);
     const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
@@ -98,15 +108,6 @@ export function CatchMap({
     }, [hasCompletedInitialLoad, onInitialLoadChange, showLoadingOverlay]);
 
     useEffect(() => {
-        if (selectedPosition) {
-            setFocusRequest({
-                center: selectedPosition,
-                key: Date.now(),
-            });
-        }
-    }, [selectedPosition]);
-
-    useEffect(() => {
         if (recenterToCurrentSignal > 0 && currentPosition) {
             setFocusRequest({
                 center: currentPosition,
@@ -130,7 +131,7 @@ export function CatchMap({
             <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
                 <MapViewport focusRequest={focusRequest} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
-                <MapClickHandler onSelectPosition={onSelectPosition} />
+                <MapClickHandler onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
 
                 <TileLayer
                     attribution={
@@ -218,26 +219,41 @@ export function CatchMap({
                 ) : null}
 
                 {catchPoints.map((catchLog) => (
-                    <CircleMarker
+                    <Marker
                         key={catchLog.id}
-                        center={[catchLog.latitude, catchLog.longitude]}
-                        radius={8}
-                        pathOptions={{
-                            color: '#0f766e',
-                            fillColor: '#14b8a6',
-                            fillOpacity: 0.75,
-                            weight: 2,
-                        }}
+                        position={[catchLog.latitude, catchLog.longitude]}
+                        icon={fishPinIcon}
                     >
                         <Popup>
                             <div className="space-y-1">
                                 <p className="font-semibold text-slate-950">{catchLog.species}</p>
+                                {!catchLog.is_owner && catchLog.owner_name ? (
+                                    <p className="text-sm text-slate-600">Shared by {catchLog.owner_name}</p>
+                                ) : null}
                                 <p className="text-sm text-slate-600">{catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : 'Date not set'}</p>
                                 {catchLog.bait_used ? <p className="text-sm text-slate-600">Bait: {catchLog.bait_used}</p> : null}
                                 {catchLog.notes ? <p className="text-sm text-slate-600">{catchLog.notes}</p> : null}
+                                {catchLog.is_owner ? (
+                                    <div className="flex gap-2 pt-2">
+                                        <button
+                                            type="button"
+                                            className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white"
+                                            onClick={() => onEditCatch(catchLog)}
+                                        >
+                                            Edit
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700"
+                                            onClick={() => onDeleteCatch(catchLog)}
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                ) : null}
                             </div>
                         </Popup>
-                    </CircleMarker>
+                    </Marker>
                 ))}
             </MapContainer>
 
@@ -250,6 +266,25 @@ export function CatchMap({
             ) : null}
         </div>
     );
+}
+
+function createFishPinIcon(): DivIcon {
+    const markup = renderToStaticMarkup(
+        <div className="flex flex-col items-center">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-white/90 bg-sky-500 text-white shadow-[0_10px_25px_rgba(14,165,233,0.4)]">
+                <Fish className="size-5" />
+            </div>
+            <div className="-mt-1.5 h-0 w-0 border-x-[7px] border-t-[12px] border-x-transparent border-t-sky-500 drop-shadow-[0_4px_6px_rgba(14,165,233,0.35)]" />
+        </div>,
+    );
+
+    return L.divIcon({
+        html: markup,
+        className: 'fishmap-catch-pin',
+        iconSize: [44, 56],
+        iconAnchor: [22, 52],
+        popupAnchor: [0, -44],
+    });
 }
 
 function MapViewport({ focusRequest }: { focusRequest: { center: [number, number]; key: number } | null }) {
@@ -308,12 +343,84 @@ function MapInteractionBridge({ onInteractionChange }: { onInteractionChange: (i
     return null;
 }
 
-function MapClickHandler({ onSelectPosition }: { onSelectPosition: (position: [number, number]) => void }) {
+function MapClickHandler({
+    onSelectPosition,
+    onLongPress,
+}: {
+    onSelectPosition: (position: [number, number]) => void;
+    onLongPress: (position: [number, number]) => void;
+}) {
+    const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pressStart = useRef<[number, number] | null>(null);
+    const longPressTriggered = useRef(false);
+
+    const clearHold = () => {
+        if (holdTimer.current) {
+            clearTimeout(holdTimer.current);
+            holdTimer.current = null;
+        }
+    };
+
+    const beginHold = (position: [number, number]) => {
+        clearHold();
+        pressStart.current = position;
+        longPressTriggered.current = false;
+        holdTimer.current = setTimeout(() => {
+            longPressTriggered.current = true;
+            onLongPress(position);
+        }, 2000);
+    };
+
     useMapEvents({
+        mousedown(event) {
+            beginHold([event.latlng.lat, event.latlng.lng]);
+        },
+        touchstart(event) {
+            beginHold([event.latlng.lat, event.latlng.lng]);
+        },
+        mouseup() {
+            clearHold();
+        },
+        touchend() {
+            clearHold();
+        },
+        mousemove(event) {
+            if (!pressStart.current) {
+                return;
+            }
+
+            const [startLat, startLng] = pressStart.current;
+            if (Math.abs(startLat - event.latlng.lat) > 0.0002 || Math.abs(startLng - event.latlng.lng) > 0.0002) {
+                clearHold();
+            }
+        },
+        touchmove(event) {
+            if (!pressStart.current) {
+                return;
+            }
+
+            const [startLat, startLng] = pressStart.current;
+            if (Math.abs(startLat - event.latlng.lat) > 0.0002 || Math.abs(startLng - event.latlng.lng) > 0.0002) {
+                clearHold();
+            }
+        },
+        dragstart() {
+            clearHold();
+        },
+        zoomstart() {
+            clearHold();
+        },
         click(event) {
+            if (longPressTriggered.current) {
+                longPressTriggered.current = false;
+                return;
+            }
+
             onSelectPosition([event.latlng.lat, event.latlng.lng]);
         },
     });
+
+    useEffect(() => clearHold, []);
 
     return null;
 }
