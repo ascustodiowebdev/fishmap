@@ -29,7 +29,9 @@ const inputClassName =
 export default function Dashboard({ catchLogs, stats }: DashboardProps) {
     const { auth, flash } = usePage<SharedData>().props;
     const [dialogOpen, setDialogOpen] = useState(false);
-    const [locationStatus, setLocationStatus] = useState<{ message: string; type: 'info' | 'warning' } | null>(null);
+    const [isInitialMapLoading, setIsInitialMapLoading] = useState(true);
+    const [currentTrackedPosition, setCurrentTrackedPosition] = useState<[number, number] | null>(null);
+    const [recenterSignal, setRecenterSignal] = useState(0);
     const form = useForm({
         species: '',
         bait_used: '',
@@ -64,36 +66,18 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
 
     const useCurrentPosition = useCallback(() => {
         if (!('geolocation' in navigator)) {
-            setLocationStatus({
-                type: 'warning',
-                message: 'Geolocation is not available in this browser.',
-            });
-
             return;
         }
 
         if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            setLocationStatus({
-                type: 'warning',
-                message: 'Location access needs HTTPS for fishmap.test. Secure the site in Herd, then reload.',
-            });
-
             return;
         }
 
         navigator.geolocation.getCurrentPosition(
             ({ coords }) => {
                 setCoordinates([coords.latitude, coords.longitude]);
-                setLocationStatus({
-                    type: 'info',
-                    message: 'Catch form updated to your current position.',
-                });
             },
-            () =>
-                setLocationStatus({
-                    type: 'warning',
-                    message: 'Unable to get your current position right now.',
-                }),
+            () => undefined,
             {
                 enableHighAccuracy: true,
                 maximumAge: 60_000,
@@ -129,23 +113,28 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                         selectedPosition={selectedPosition}
                         onSelectPosition={(position) => {
                             setCoordinates(position);
-                            setLocationStatus({
-                                type: 'info',
-                                message: 'Catch spot selected from the map.',
-                            });
                         }}
                         onCurrentPositionChange={(position) => {
+                            setCurrentTrackedPosition(position);
                             if (!selectedPosition) {
-                                setCoordinates(position);
+                                if (position) {
+                                    setCoordinates(position);
+                                }
                             }
                         }}
-                        onLocationStatusChange={setLocationStatus}
+                        onInteractionChange={() => undefined}
+                        recenterToCurrentSignal={recenterSignal}
+                        onInitialLoadChange={setIsInitialMapLoading}
                     />
 
-                    <div className="pointer-events-none absolute inset-x-4 top-4 flex flex-col gap-3 md:left-4 md:right-auto md:w-[360px]">
+                    <div
+                        className={`pointer-events-none absolute inset-x-4 top-4 z-[520] flex flex-col gap-3 transition-opacity duration-200 md:left-4 md:right-auto md:w-[360px] ${
+                            isInitialMapLoading ? 'opacity-0' : 'opacity-100'
+                        }`}
+                    >
                         <div className="pointer-events-auto rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
                             <p className="text-xs font-semibold tracking-[0.22em] text-teal-800 uppercase">Fishmap</p>
-                            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{auth.user?.name}'s live map</h1>
+                            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Live map</h1>
                             <p className="mt-2 text-sm leading-6 text-slate-600">
                                 Tap anywhere on the water to choose a catch spot, then save the fish from the floating action button.
                             </p>
@@ -156,13 +145,23 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                             <StatCard icon={Globe} label="Public" value={stats.public_spots.toString()} />
                             <StatCard icon={Waves} label="Latest" value={latestTripLabel} compact />
                         </div>
-
                         {flash.success ? <StatusBanner type="info" message={flash.success} /> : null}
-                        {locationStatus ? <StatusBanner type={locationStatus.type} message={locationStatus.message} /> : null}
                     </div>
 
                     <div className="absolute right-4 bottom-4 z-[500] flex flex-col gap-3 md:right-5 md:bottom-5">
-                        <Button type="button" size="icon" variant="secondary" className="h-12 w-12 rounded-full shadow-lg" onClick={useCurrentPosition}>
+                        <Button
+                            type="button"
+                            size="icon"
+                            variant="secondary"
+                            className="h-12 w-12 rounded-full shadow-lg"
+                            onClick={() => {
+                                if (currentTrackedPosition) {
+                                    setRecenterSignal(Date.now());
+                                } else {
+                                    useCurrentPosition();
+                                }
+                            }}
+                        >
                             <Crosshair />
                         </Button>
 
