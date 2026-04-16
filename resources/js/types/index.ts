@@ -1,7 +1,11 @@
 import { LucideIcon } from 'lucide-react';
 
 export interface Auth {
-    user: User;
+    user: User | null;
+}
+
+export interface Flash {
+    success?: string | null;
 }
 
 export interface BreadcrumbItem {
@@ -25,7 +29,23 @@ export interface SharedData {
     name: string;
     quote: { message: string; author: string };
     auth: Auth;
+    flash: Flash;
     [key: string]: unknown;
+}
+
+export interface CatchLog {
+    id: number;
+    species: string;
+    bait_used: string | null;
+    notes: string | null;
+    photo_url: string | null;
+    fish_length_cm: string | null;
+    fish_weight_kg: string | null;
+    caught_at: string | null;
+    latitude: string | null;
+    longitude: string | null;
+    visibility: 'private' | 'friends' | 'public';
+    created_at: string;
 }
 
 export interface User {

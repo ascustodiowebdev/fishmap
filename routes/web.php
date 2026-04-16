@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\CatchLogController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -8,9 +9,8 @@ Route::get('/', function () {
 })->name('home');
 
 Route::middleware(['auth'])->group(function () {
-    Route::get('dashboard', function () {
-        return Inertia::render('dashboard');
-    })->name('dashboard');
+    Route::get('dashboard', [CatchLogController::class, 'index'])->name('dashboard');
+    Route::post('catch-logs', [CatchLogController::class, 'store'])->name('catch-logs.store');
 });
 
 require __DIR__.'/settings.php';
