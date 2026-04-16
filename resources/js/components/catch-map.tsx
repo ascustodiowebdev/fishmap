@@ -6,8 +6,10 @@ interface CatchMapProps {
     catchLogs: CatchLog[];
     selectedPosition: [number, number] | null;
     onSelectPosition: (position: [number, number]) => void;
-    onCurrentPositionChange: (position: [number, number]) => void;
-    onLocationStatusChange: (status: { message: string; type: 'info' | 'warning' } | null) => void;
+    onCurrentPositionChange: (position: [number, number] | null) => void;
+    onInteractionChange: (isInteracting: boolean) => void;
+    recenterToCurrentSignal: number;
+    onInitialLoadChange: (isLoading: boolean) => void;
 }
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
@@ -18,11 +20,16 @@ export function CatchMap({
     selectedPosition,
     onSelectPosition,
     onCurrentPositionChange,
-    onLocationStatusChange,
+    onInteractionChange,
+    recenterToCurrentSignal,
+    onInitialLoadChange,
 }: CatchMapProps) {
     const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(null);
     const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
     const [showLoadingOverlay, setShowLoadingOverlay] = useState(true);
+    const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
+    const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
+    const hasAutoCenteredRef = useRef(false);
     const loadDelayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const catchPoints = catchLogs
@@ -36,78 +43,47 @@ export function CatchMap({
 
     useEffect(() => {
         if (!('geolocation' in navigator)) {
-            onLocationStatusChange({
-                type: 'warning',
-                message: 'Geolocation is not available in this browser.',
-            });
-
+            onCurrentPositionChange(null);
             return;
         }
 
         if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            onLocationStatusChange({
-                type: 'warning',
-                message: 'Location access needs a secure page. Use HTTPS for fishmap.test in Herd to enable automatic centering.',
-            });
-
+            onCurrentPositionChange(null);
             return;
         }
 
-        onLocationStatusChange({
-            type: 'info',
-            message: 'Requesting your current position...',
-        });
+        const requestPosition = () => {
+            navigator.geolocation.getCurrentPosition(
+                ({ coords }) => {
+                    const nextPosition: [number, number] = [coords.latitude, coords.longitude];
+                    setCurrentPosition(nextPosition);
+                    setLocationAccuracy(Math.round(coords.accuracy));
+                    onCurrentPositionChange(nextPosition);
 
-        const updateFromCoordinates = (coords: GeolocationCoordinates) => {
-            const nextPosition: [number, number] = [coords.latitude, coords.longitude];
-            const nextAccuracy = Math.round(coords.accuracy);
-
-            setCurrentPosition(nextPosition);
-            setLocationAccuracy(nextAccuracy);
-            onCurrentPositionChange(nextPosition);
-            onLocationStatusChange({
-                type: nextAccuracy > 150 ? 'warning' : 'info',
-                message:
-                    nextAccuracy > 150
-                        ? `Location found, but Windows accuracy is rough right now (about ${nextAccuracy} m).`
-                        : `Centered on your current position (about ${nextAccuracy} m accuracy).`,
-            });
+                    if (!hasAutoCenteredRef.current) {
+                        hasAutoCenteredRef.current = true;
+                        setFocusRequest({
+                            center: nextPosition,
+                            key: Date.now(),
+                        });
+                    }
+                },
+                () => undefined,
+                {
+                    enableHighAccuracy: true,
+                    maximumAge: 5000,
+                    timeout: 10000,
+                },
+            );
         };
 
-        navigator.geolocation.getCurrentPosition(
-            ({ coords }) => updateFromCoordinates(coords),
-            () => undefined,
-            {
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 8000,
-            },
-        );
-
-        const watchId = navigator.geolocation.watchPosition(
-            ({ coords }) => updateFromCoordinates(coords),
-            (error) => {
-                const message =
-                    error.code === error.PERMISSION_DENIED
-                        ? 'Location permission was denied. You can still tap the map to place a catch.'
-                        : 'Unable to refine your current position right now.';
-
-                onLocationStatusChange({
-                    type: 'warning',
-                    message,
-                });
-            },
-            {
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 15000,
-            },
-        );
+        requestPosition();
+        const intervalId = window.setInterval(requestPosition, 10000);
 
         return () => {
-            navigator.geolocation.clearWatch(watchId);
+            window.clearInterval(intervalId);
         };
-    }, [onCurrentPositionChange, onLocationStatusChange]);
+    }, [onCurrentPositionChange]);
 
     useEffect(() => {
         return () => {
@@ -117,8 +93,29 @@ export function CatchMap({
         };
     }, []);
 
+    useEffect(() => {
+        onInitialLoadChange(showLoadingOverlay && !hasCompletedInitialLoad);
+    }, [hasCompletedInitialLoad, onInitialLoadChange, showLoadingOverlay]);
+
+    useEffect(() => {
+        if (selectedPosition) {
+            setFocusRequest({
+                center: selectedPosition,
+                key: Date.now(),
+            });
+        }
+    }, [selectedPosition]);
+
+    useEffect(() => {
+        if (recenterToCurrentSignal > 0 && currentPosition) {
+            setFocusRequest({
+                center: currentPosition,
+                key: recenterToCurrentSignal,
+            });
+        }
+    }, [currentPosition, recenterToCurrentSignal]);
+
     const initialCenter = currentPosition ?? selectedPosition ?? (catchPoints.length > 0 ? ([catchPoints[0].latitude, catchPoints[0].longitude] as [number, number]) : defaultCenter);
-    const displayCenter = currentPosition ?? selectedPosition ?? initialCenter;
 
     const displayAccuracyRadius = useMemo(() => {
         if (!currentPosition || !locationAccuracy || locationAccuracy <= 30) {
@@ -129,9 +126,10 @@ export function CatchMap({
     }, [currentPosition, locationAccuracy]);
 
     return (
-        <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[#07131a] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
-            <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="h-full w-full bg-[#07131a]">
-                <MapViewport center={displayCenter} />
+        <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[#0f172a] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
+            <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
+                <MapViewport focusRequest={focusRequest} />
+                <MapInteractionBridge onInteractionChange={onInteractionChange} />
                 <MapClickHandler onSelectPosition={onSelectPosition} />
 
                 <TileLayer
@@ -145,8 +143,15 @@ export function CatchMap({
                             ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=${satelliteKey}`
                             : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
                     }
+                    keepBuffer={8}
+                    updateWhenIdle={false}
+                    updateWhenZooming
                     eventHandlers={{
                         loading: () => {
+                            if (hasCompletedInitialLoad) {
+                                return;
+                            }
+
                             if (loadDelayTimer.current) {
                                 clearTimeout(loadDelayTimer.current);
                             }
@@ -162,6 +167,7 @@ export function CatchMap({
                             }
 
                             setShowLoadingOverlay(false);
+                            setHasCompletedInitialLoad(true);
                         },
                     }}
                 />
@@ -236,7 +242,7 @@ export function CatchMap({
             </MapContainer>
 
             {showLoadingOverlay ? (
-                <div className="pointer-events-none absolute inset-0 z-[450] flex items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.16),_transparent_30%),linear-gradient(180deg,_#07131a_0%,_#0b2028_100%)]">
+                <div className="pointer-events-none absolute inset-0 z-[450] flex items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.16),_transparent_30%),linear-gradient(180deg,_#0f172a_0%,_#0b2028_100%)]">
                     <div className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-sm font-medium text-white/85 backdrop-blur">
                         Loading map...
                     </div>
@@ -246,24 +252,58 @@ export function CatchMap({
     );
 }
 
-function MapViewport({ center }: { center: [number, number] }) {
+function MapViewport({ focusRequest }: { focusRequest: { center: [number, number]; key: number } | null }) {
     const map = useMap();
-    const previousCenter = useRef<[number, number] | null>(null);
+    const previousKey = useRef<number | null>(null);
 
     useEffect(() => {
-        const last = previousCenter.current;
+        const invalidate = () => map.invalidateSize({ pan: false, debounceMoveend: true });
 
-        if (last && Math.abs(last[0] - center[0]) < 0.00001 && Math.abs(last[1] - center[1]) < 0.00001) {
+        invalidate();
+
+        const immediate = window.setTimeout(invalidate, 0);
+        const delayed = window.setTimeout(invalidate, 250);
+
+        window.addEventListener('resize', invalidate);
+
+        return () => {
+            window.clearTimeout(immediate);
+            window.clearTimeout(delayed);
+            window.removeEventListener('resize', invalidate);
+        };
+    }, [map]);
+
+    useEffect(() => {
+        if (!focusRequest || previousKey.current === focusRequest.key) {
             return;
         }
 
-        previousCenter.current = center;
+        previousKey.current = focusRequest.key;
 
-        map.flyTo(center, Math.max(map.getZoom(), 14), {
+        map.flyTo(focusRequest.center, Math.max(map.getZoom(), 14), {
             animate: true,
             duration: 0.35,
         });
-    }, [center, map]);
+    }, [focusRequest, map]);
+
+    return null;
+}
+
+function MapInteractionBridge({ onInteractionChange }: { onInteractionChange: (isInteracting: boolean) => void }) {
+    useMapEvents({
+        dragstart() {
+            onInteractionChange(true);
+        },
+        dragend() {
+            onInteractionChange(false);
+        },
+        zoomstart() {
+            onInteractionChange(true);
+        },
+        zoomend() {
+            onInteractionChange(false);
+        },
+    });
 
     return null;
 }

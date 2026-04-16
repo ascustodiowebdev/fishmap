@@ -156,3 +156,10 @@
         @apply bg-background text-foreground;
     }
 }
+
+.fishmap-map,
+.fishmap-map .leaflet-container,
+.fishmap-map .leaflet-pane,
+.fishmap-map .leaflet-tile-container {
+    background: #07131a;
+}
