@@ -163,3 +163,14 @@
 .fishmap-map .leaflet-tile-container {
     background: #07131a;
 }
+
+.fishmap-catch-pin {
+    background: transparent !important;
+    border: 0 !important;
+    width: 48px !important;
+    height: 60px !important;
+    display: block;
+    margin-left: -24px !important;
+    margin-top: -54px !important;
+    overflow: visible !important;
+}

@@ -42,6 +42,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
     const [successTitle, setSuccessTitle] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
     const successCloseTimer = useRef<number | null>(null);
+    const holdOpenTimer = useRef<number | null>(null);
 
     const form = useForm({
         species: '',
@@ -139,6 +140,10 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                 window.clearTimeout(successCloseTimer.current);
                 successCloseTimer.current = null;
             }
+            if (holdOpenTimer.current) {
+                window.clearTimeout(holdOpenTimer.current);
+                holdOpenTimer.current = null;
+            }
 
             setActiveCatch(null);
             populateForm(null);
@@ -205,6 +210,10 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
     }, [setCoordinates]);
 
     const beginPickAnotherSpot = useCallback(() => {
+        if (holdOpenTimer.current) {
+            window.clearTimeout(holdOpenTimer.current);
+            holdOpenTimer.current = null;
+        }
         setDialogOpen(false);
         setMapPickMode(true);
     }, []);
@@ -347,6 +356,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                     <CatchMap
                         catchLogs={catchLogs}
                         selectedPosition={selectedPosition}
+                        allowTapSelection={mapPickMode}
                         onSelectPosition={(position) => {
                             setCoordinates(position);
 
@@ -361,7 +371,15 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                             form.setData('longitude', '');
                         }}
                         onLongPress={(position) => {
-                            openActionDialog(position);
+                            setCoordinates(position);
+
+                            if (holdOpenTimer.current) {
+                                window.clearTimeout(holdOpenTimer.current);
+                            }
+                            holdOpenTimer.current = window.setTimeout(() => {
+                                openActionDialog(position);
+                                holdOpenTimer.current = null;
+                            }, 120);
                         }}
                         onCurrentPositionChange={(position) => {
                             setCurrentTrackedPosition(position);
@@ -433,11 +451,19 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                     window.clearTimeout(successCloseTimer.current);
                                     successCloseTimer.current = null;
                                 }
+                                if (holdOpenTimer.current) {
+                                    window.clearTimeout(holdOpenTimer.current);
+                                    holdOpenTimer.current = null;
+                                }
                                 resetDialogState();
                             }
                         }}
                     >
-                        <DialogContent className="left-1/2 top-auto bottom-0 max-h-[85vh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 rounded-t-[1.75rem] rounded-b-none border-slate-200 p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem]">
+                        <DialogContent
+                            onInteractOutside={(event) => event.preventDefault()}
+                            onPointerDownOutside={(event) => event.preventDefault()}
+                            className="left-1/2 top-auto bottom-0 max-h-[85vh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 rounded-t-[1.75rem] rounded-b-none border-slate-200 p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem]"
+                        >
                             <div className="relative p-6">
                                 <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
 

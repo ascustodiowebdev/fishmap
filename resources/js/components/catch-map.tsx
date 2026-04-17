@@ -1,7 +1,7 @@
 import { useTranslator } from '@/lib/i18n';
 import { type CatchLog } from '@/types';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import L, { DivIcon, LeafletMouseEvent } from 'leaflet';
+import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { Fish } from 'lucide-react';
@@ -9,6 +9,7 @@ import { Fish } from 'lucide-react';
 interface CatchMapProps {
     catchLogs: CatchLog[];
     selectedPosition: [number, number] | null;
+    allowTapSelection: boolean;
     onSelectPosition: (position: [number, number]) => void;
     onClearSelection: () => void;
     onCurrentPositionChange: (position: [number, number] | null) => void;
@@ -22,10 +23,12 @@ interface CatchMapProps {
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
 const satelliteKey = import.meta.env.VITE_MAPTILER_KEY;
+type BaseLayerMode = 'street' | 'nautical' | 'satellite';
 
 export function CatchMap({
     catchLogs,
     selectedPosition,
+    allowTapSelection,
     onSelectPosition,
     onClearSelection,
     onCurrentPositionChange,
@@ -41,6 +44,7 @@ export function CatchMap({
     const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
     const [showLoadingOverlay, setShowLoadingOverlay] = useState(true);
     const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
+    const [baseLayer, setBaseLayer] = useState<BaseLayerMode>('nautical');
     const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
     const hasAutoCenteredRef = useRef(false);
     const loadDelayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -134,16 +138,16 @@ export function CatchMap({
             <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
                 <MapViewport focusRequest={focusRequest} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
-                <MapClickHandler onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
+                <MapClickHandler allowTapSelection={allowTapSelection} onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
 
                 <TileLayer
                     attribution={
-                        satelliteKey
+                        baseLayer === 'satellite' && satelliteKey
                             ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                             : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                     }
                     url={
-                        satelliteKey
+                        baseLayer === 'satellite' && satelliteKey
                             ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=${satelliteKey}`
                             : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
                     }
@@ -175,6 +179,16 @@ export function CatchMap({
                         },
                     }}
                 />
+
+                {baseLayer === 'nautical' ? (
+                    <TileLayer
+                        attribution='&copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> seamarks'
+                        url="https://t1.openseamap.org/seamark/{z}/{x}/{y}.png"
+                        keepBuffer={8}
+                        updateWhenIdle={false}
+                        updateWhenZooming
+                    />
+                ) : null}
 
                 {currentPosition ? (
                     <>
@@ -214,10 +228,23 @@ export function CatchMap({
                     <CircleMarker
                         center={selectedPosition}
                         radius={10}
+                        bubblingMouseEvents={false}
                         eventHandlers={{
                             click: (event: LeafletMouseEvent) => {
-                                L.DomEvent.stop(event);
+                                if (event.originalEvent) {
+                                    L.DomEvent.stop(event.originalEvent);
+                                }
                                 onClearSelection();
+                            },
+                            mousedown: (event: LeafletMouseEvent) => {
+                                if (event.originalEvent) {
+                                    L.DomEvent.stop(event.originalEvent);
+                                }
+                            },
+                            touchstart: (event: LeafletMouseEvent) => {
+                                if (event.originalEvent) {
+                                    L.DomEvent.stop(event.originalEvent);
+                                }
                             },
                         }}
                         pathOptions={{
@@ -226,9 +253,7 @@ export function CatchMap({
                             fillOpacity: 0.95,
                             weight: 3,
                         }}
-                    >
-                        <Popup>{t('dashboard.selected_catch_spot')}</Popup>
-                    </CircleMarker>
+                    />
                 ) : null}
 
                 {catchPoints.map((catchLog) => (
@@ -236,6 +261,25 @@ export function CatchMap({
                         key={catchLog.id}
                         position={[catchLog.latitude, catchLog.longitude]}
                         icon={createFishPinIcon(Boolean(catchLog.is_owner))}
+                        bubblingMouseEvents={false}
+                        eventHandlers={{
+                            click: (event) => {
+                                if (event.originalEvent) {
+                                    L.DomEvent.stopPropagation(event.originalEvent);
+                                }
+                                event.target.openPopup();
+                            },
+                            mousedown: (event) => {
+                                if (event.originalEvent) {
+                                    L.DomEvent.stopPropagation(event.originalEvent);
+                                }
+                            },
+                            touchstart: (event) => {
+                                if (event.originalEvent) {
+                                    L.DomEvent.stopPropagation(event.originalEvent);
+                                }
+                            },
+                        }}
                     >
                         <Popup>
                             <div className="space-y-1">
@@ -279,28 +323,66 @@ export function CatchMap({
                     </div>
                 </div>
             ) : null}
+
+            <div className="absolute bottom-4 left-4 z-[500] flex gap-2 md:bottom-5 md:left-5">
+                <button
+                    type="button"
+                    onClick={() => setBaseLayer('street')}
+                    className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                        baseLayer === 'street'
+                            ? 'bg-white text-slate-950'
+                            : 'border border-white/15 bg-slate-900/70 text-white/80'
+                    }`}
+                >
+                    {t('dashboard.map_street')}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setBaseLayer('nautical')}
+                    className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                        baseLayer === 'nautical'
+                            ? 'bg-white text-slate-950'
+                            : 'border border-white/15 bg-slate-900/70 text-white/80'
+                    }`}
+                >
+                    {t('dashboard.map_nautical')}
+                </button>
+                {satelliteKey ? (
+                    <button
+                        type="button"
+                        onClick={() => setBaseLayer('satellite')}
+                        className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                            baseLayer === 'satellite'
+                                ? 'bg-white text-slate-950'
+                                : 'border border-white/15 bg-slate-900/70 text-white/80'
+                        }`}
+                    >
+                        {t('dashboard.map_satellite')}
+                    </button>
+                ) : null}
+            </div>
         </div>
     );
 }
 
-function createFishPinIcon(isOwner: boolean): DivIcon {
-    const markerColor = isOwner ? 'bg-emerald-500 border-emerald-100 shadow-[0_10px_25px_rgba(16,185,129,0.35)]' : 'bg-sky-500 border-white/90 shadow-[0_10px_25px_rgba(14,165,233,0.4)]';
-    const tailColor = isOwner ? 'border-t-emerald-500 drop-shadow-[0_4px_6px_rgba(16,185,129,0.35)]' : 'border-t-sky-500 drop-shadow-[0_4px_6px_rgba(14,165,233,0.35)]';
+function createFishPinIcon(isOwner: boolean): Icon {
+    const primary = isOwner ? '#10b981' : '#0ea5e9';
+    const ring = isOwner ? '#d1fae5' : '#e0f2fe';
     const markup = renderToStaticMarkup(
-        <div className="flex flex-col items-center">
-            <div className={`flex h-11 w-11 items-center justify-center rounded-full border-2 text-white ${markerColor}`}>
-                <Fish className="size-5" />
-            </div>
-            <div className={`-mt-1.5 h-0 w-0 border-x-[7px] border-t-[12px] border-x-transparent ${tailColor}`} />
-        </div>,
+        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="60" viewBox="0 0 48 60" fill="none">
+            <circle cx="24" cy="21" r="18" fill={primary} stroke={ring} strokeWidth="2.5" />
+            <g transform="translate(12 9)" color="white">
+                <Fish size={24} stroke="currentColor" strokeWidth={2.4} />
+            </g>
+        </svg>,
     );
 
-    return L.divIcon({
-        html: markup,
+    return L.icon({
+        iconUrl: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(markup)}`,
+        iconSize: [48, 48],
+        iconAnchor: [24, 24],
+        popupAnchor: [0, -46],
         className: 'fishmap-catch-pin',
-        iconSize: [44, 56],
-        iconAnchor: [22, 52],
-        popupAnchor: [0, -44],
     });
 }
 
@@ -361,53 +443,74 @@ function MapInteractionBridge({ onInteractionChange }: { onInteractionChange: (i
 }
 
 function MapClickHandler({
+    allowTapSelection,
     onSelectPosition,
     onLongPress,
 }: {
+    allowTapSelection: boolean;
     onSelectPosition: (position: [number, number]) => void;
     onLongPress: (position: [number, number]) => void;
 }) {
     const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pressStart = useRef<[number, number] | null>(null);
+    const pressStart = useRef<{ position: [number, number]; startedAt: number; moved: boolean } | null>(null);
     const longPressTriggered = useRef(false);
-    const clearHold = () => {
+
+    const beginHold = (position: [number, number]) => {
+        if (holdTimer.current) {
+            clearTimeout(holdTimer.current);
+        }
+
+        pressStart.current = {
+            position,
+            startedAt: Date.now(),
+            moved: false,
+        };
+        longPressTriggered.current = false;
+
+        holdTimer.current = setTimeout(() => {
+            if (!pressStart.current || pressStart.current.moved) {
+                return;
+            }
+
+            longPressTriggered.current = true;
+            onLongPress(pressStart.current.position);
+        }, 1000);
+    };
+
+    const cancelHold = () => {
         if (holdTimer.current) {
             clearTimeout(holdTimer.current);
             holdTimer.current = null;
         }
-    };
 
-    const beginHold = (position: [number, number]) => {
-        clearHold();
-        pressStart.current = position;
-        longPressTriggered.current = false;
-        holdTimer.current = setTimeout(() => {
-            longPressTriggered.current = true;
-            onLongPress(position);
-        }, 2000);
+        pressStart.current = null;
     };
 
     useMapEvents({
         mousedown(event) {
+            if (event.originalEvent.button !== 0) {
+                return;
+            }
+
             beginHold([event.latlng.lat, event.latlng.lng]);
         },
         touchstart(event) {
             beginHold([event.latlng.lat, event.latlng.lng]);
         },
         mouseup() {
-            clearHold();
+            cancelHold();
         },
         touchend() {
-            clearHold();
+            cancelHold();
         },
         mousemove(event) {
             if (!pressStart.current) {
                 return;
             }
 
-            const [startLat, startLng] = pressStart.current;
+            const [startLat, startLng] = pressStart.current.position;
             if (Math.abs(startLat - event.latlng.lat) > 0.0002 || Math.abs(startLng - event.latlng.lng) > 0.0002) {
-                clearHold();
+                pressStart.current.moved = true;
             }
         },
         touchmove(event) {
@@ -415,28 +518,37 @@ function MapClickHandler({
                 return;
             }
 
-            const [startLat, startLng] = pressStart.current;
+            const [startLat, startLng] = pressStart.current.position;
             if (Math.abs(startLat - event.latlng.lat) > 0.0002 || Math.abs(startLng - event.latlng.lng) > 0.0002) {
-                clearHold();
+                pressStart.current.moved = true;
             }
         },
         dragstart() {
-            clearHold();
+            cancelHold();
         },
         zoomstart() {
-            clearHold();
+            cancelHold();
+        },
+        contextmenu(event) {
+            L.DomEvent.preventDefault(event.originalEvent);
+            cancelHold();
         },
         click(event) {
             if (longPressTriggered.current) {
                 longPressTriggered.current = false;
+                cancelHold();
                 return;
             }
 
-            onSelectPosition([event.latlng.lat, event.latlng.lng]);
+            cancelHold();
+
+            if (allowTapSelection) {
+                onSelectPosition([event.latlng.lat, event.latlng.lng]);
+            }
         },
     });
 
-    useEffect(() => clearHold, []);
+    useEffect(() => cancelHold, []);
 
     return null;
 }
