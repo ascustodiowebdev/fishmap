@@ -4,34 +4,21 @@ import { router } from '@inertiajs/react';
 
 export function LanguageToggle() {
     const { locale } = useTranslator();
+    const nextLocale = locale === 'en' ? 'pt' : 'en';
+    const nextLabel = nextLocale.toUpperCase();
 
     return (
-        <div className="inline-flex items-center gap-1 rounded-full border border-slate-200/80 bg-white/80 p-1 shadow-sm backdrop-blur">
+        <div className="inline-flex items-center rounded-full border border-slate-200/80 bg-white/80 p-1 shadow-sm backdrop-blur">
             <Button
                 type="button"
                 size="sm"
-                variant={locale === 'en' ? 'default' : 'ghost'}
-                className="h-8 min-w-11 rounded-full px-3"
+                variant="default"
+                className="h-8 min-w-10 rounded-full px-3 text-xs sm:min-w-11"
                 onClick={() => {
-                    if (locale !== 'en') {
-                        router.post(route('locale.update'), { locale: 'en' }, { preserveScroll: true });
-                    }
+                    router.post(route('locale.update'), { locale: nextLocale }, { preserveScroll: true });
                 }}
             >
-                EN
-            </Button>
-            <Button
-                type="button"
-                size="sm"
-                variant={locale === 'pt' ? 'default' : 'ghost'}
-                className="h-8 min-w-11 rounded-full px-3"
-                onClick={() => {
-                    if (locale !== 'pt') {
-                        router.post(route('locale.update'), { locale: 'pt' }, { preserveScroll: true });
-                    }
-                }}
-            >
-                PT
+                {nextLabel}
             </Button>
         </div>
     );

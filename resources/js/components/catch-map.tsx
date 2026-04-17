@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
-import { Fish } from 'lucide-react';
+import { Fish, Layers3 } from 'lucide-react';
 
 interface CatchMapProps {
     catchLogs: CatchLog[];
@@ -29,6 +29,7 @@ interface CatchMapProps {
 const defaultCenter: [number, number] = [38.7223, -9.1393];
 const satelliteKey = import.meta.env.VITE_MAPTILER_KEY;
 type BaseLayerMode = 'street' | 'nautical' | 'satellite';
+const layerOrder: BaseLayerMode[] = satelliteKey ? ['street', 'nautical', 'satellite'] : ['street', 'nautical'];
 
 export function CatchMap({
     catchLogs,
@@ -154,6 +155,15 @@ export function CatchMap({
 
         return Math.min(Math.max(locationAccuracy / 4, 12), 40);
     }, [displayedPosition, locationAccuracy, positionOverride]);
+
+    const cycleLayer = () => {
+        const currentIndex = layerOrder.indexOf(baseLayer);
+        const nextLayer = layerOrder[(currentIndex + 1) % layerOrder.length];
+        setBaseLayer(nextLayer);
+    };
+
+    const currentLayerLabel =
+        baseLayer === 'street' ? t('dashboard.map_street') : baseLayer === 'nautical' ? t('dashboard.map_nautical') : t('dashboard.map_satellite');
 
     return (
         <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[#0f172a] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
@@ -401,42 +411,53 @@ export function CatchMap({
                 </div>
             ) : null}
 
-            <div className="absolute bottom-4 left-4 z-[500] flex gap-2 md:bottom-5 md:left-5">
+            <div className="absolute bottom-14 left-3 z-[500] md:bottom-5 md:left-5">
                 <button
                     type="button"
-                    onClick={() => setBaseLayer('street')}
-                    className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                        baseLayer === 'street'
-                            ? 'bg-white text-slate-950'
-                            : 'border border-white/15 bg-slate-900/70 text-white/80'
-                    }`}
+                    onClick={cycleLayer}
+                    className="flex items-center gap-2 rounded-full border border-white/15 bg-slate-900/72 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-white shadow-lg backdrop-blur transition md:hidden"
                 >
-                    {t('dashboard.map_street')}
+                    <Layers3 className="size-4" />
+                    <span className="uppercase">{currentLayerLabel}</span>
                 </button>
-                <button
-                    type="button"
-                    onClick={() => setBaseLayer('nautical')}
-                    className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                        baseLayer === 'nautical'
-                            ? 'bg-white text-slate-950'
-                            : 'border border-white/15 bg-slate-900/70 text-white/80'
-                    }`}
-                >
-                    {t('dashboard.map_nautical')}
-                </button>
-                {satelliteKey ? (
+
+                <div className="hidden gap-2 md:flex">
                     <button
                         type="button"
-                        onClick={() => setBaseLayer('satellite')}
+                        onClick={() => setBaseLayer('street')}
                         className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                            baseLayer === 'satellite'
+                            baseLayer === 'street'
                                 ? 'bg-white text-slate-950'
                                 : 'border border-white/15 bg-slate-900/70 text-white/80'
                         }`}
                     >
-                        {t('dashboard.map_satellite')}
+                        {t('dashboard.map_street')}
                     </button>
-                ) : null}
+                    <button
+                        type="button"
+                        onClick={() => setBaseLayer('nautical')}
+                        className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                            baseLayer === 'nautical'
+                                ? 'bg-white text-slate-950'
+                                : 'border border-white/15 bg-slate-900/70 text-white/80'
+                        }`}
+                    >
+                        {t('dashboard.map_nautical')}
+                    </button>
+                    {satelliteKey ? (
+                        <button
+                            type="button"
+                            onClick={() => setBaseLayer('satellite')}
+                            className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                                baseLayer === 'satellite'
+                                    ? 'bg-white text-slate-950'
+                                    : 'border border-white/15 bg-slate-900/70 text-white/80'
+                            }`}
+                        >
+                            {t('dashboard.map_satellite')}
+                        </button>
+                    ) : null}
+                </div>
             </div>
         </div>
     );
@@ -528,19 +549,22 @@ function MapClickHandler({
     onSelectPosition: (position: [number, number]) => void;
     onLongPress: (position: [number, number]) => void;
 }) {
+    const map = useMap();
     const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pressStart = useRef<{ position: [number, number]; startedAt: number; moved: boolean } | null>(null);
+    const pressStart = useRef<{ position: [number, number]; pointX: number; pointY: number; moved: boolean; pointerType: 'mouse' | 'touch' | 'pen' } | null>(null);
     const longPressTriggered = useRef(false);
 
-    const beginHold = (position: [number, number]) => {
+    const beginHold = (position: [number, number], pointX: number, pointY: number, pointerType: 'mouse' | 'touch' | 'pen') => {
         if (holdTimer.current) {
             clearTimeout(holdTimer.current);
         }
 
         pressStart.current = {
             position,
-            startedAt: Date.now(),
+            pointX,
+            pointY,
             moved: false,
+            pointerType,
         };
         longPressTriggered.current = false;
 
@@ -563,17 +587,121 @@ function MapClickHandler({
         pressStart.current = null;
     };
 
-    useMapEvents({
-        mousedown(event) {
-            if (event.originalEvent.button !== 0) {
+    useEffect(() => {
+        const container = map.getContainer();
+
+        const isBlockedTarget = (target: EventTarget | null) => {
+            if (!(target instanceof HTMLElement)) {
+                return false;
+            }
+
+            return Boolean(
+                target.closest(
+                    '.leaflet-marker-icon, .leaflet-popup, .leaflet-control, .leaflet-interactive, .leaflet-marker-pane',
+                ),
+            );
+        };
+
+        const startFromPointer = (clientX: number, clientY: number, target: EventTarget | null, pointerType: 'mouse' | 'touch' | 'pen') => {
+            if (isBlockedTarget(target)) {
+                cancelHold();
                 return;
             }
 
-            beginHold([event.latlng.lat, event.latlng.lng]);
-        },
-        touchstart(event) {
-            beginHold([event.latlng.lat, event.latlng.lng]);
-        },
+            const rect = container.getBoundingClientRect();
+            const point = L.point(clientX - rect.left, clientY - rect.top);
+            const latlng = map.containerPointToLatLng(point);
+            beginHold([latlng.lat, latlng.lng], clientX, clientY, pointerType);
+        };
+
+        const onPointerDown = (event: PointerEvent) => {
+            if (event.pointerType === 'mouse' && event.button !== 0) {
+                return;
+            }
+
+            const pointerType = (event.pointerType || 'mouse') as 'mouse' | 'touch' | 'pen';
+            startFromPointer(event.clientX, event.clientY, event.target, pointerType);
+        };
+
+        const onMouseDown = (event: MouseEvent) => {
+            if (event.button !== 0) {
+                return;
+            }
+
+            startFromPointer(event.clientX, event.clientY, event.target, 'mouse');
+        };
+
+        const onTouchStart = (event: TouchEvent) => {
+            const touch = event.touches[0];
+            if (!touch) {
+                return;
+            }
+
+            startFromPointer(touch.clientX, touch.clientY, event.target, 'touch');
+        };
+
+        const onPointerMove = (clientX: number, clientY: number) => {
+            if (!pressStart.current) {
+                return;
+            }
+
+            const deltaX = Math.abs(pressStart.current.pointX - clientX);
+            const deltaY = Math.abs(pressStart.current.pointY - clientY);
+            const threshold = pressStart.current.pointerType === 'touch' ? 18 : 10;
+
+            if (deltaX > threshold || deltaY > threshold) {
+                pressStart.current.moved = true;
+                cancelHold();
+            }
+        };
+
+        const onPointerMoveEvent = (event: PointerEvent) => onPointerMove(event.clientX, event.clientY);
+        const onMouseMove = (event: MouseEvent) => onPointerMove(event.clientX, event.clientY);
+        const onTouchMove = (event: TouchEvent) => {
+            const touch = event.touches[0];
+            if (!touch) {
+                return;
+            }
+            onPointerMove(touch.clientX, touch.clientY);
+        };
+
+        const onEnd = () => cancelHold();
+        const onContextMenu = (event: Event) => {
+            event.preventDefault();
+        };
+
+        container.addEventListener('pointerdown', onPointerDown);
+        container.addEventListener('pointermove', onPointerMoveEvent, { passive: true });
+        container.addEventListener('pointerup', onEnd, { passive: true });
+        container.addEventListener('pointercancel', onEnd, { passive: true });
+        container.addEventListener('mousedown', onMouseDown);
+        container.addEventListener('touchstart', onTouchStart, { passive: true });
+        container.addEventListener('mousemove', onMouseMove, { passive: true });
+        container.addEventListener('touchmove', onTouchMove, { passive: true });
+        container.addEventListener('mouseup', onEnd, { passive: true });
+        container.addEventListener('mouseleave', onEnd, { passive: true });
+        container.addEventListener('touchend', onEnd, { passive: true });
+        container.addEventListener('touchcancel', onEnd, { passive: true });
+        container.addEventListener('contextmenu', onContextMenu);
+
+        return () => {
+            container.removeEventListener('pointerdown', onPointerDown);
+            container.removeEventListener('pointermove', onPointerMoveEvent);
+            container.removeEventListener('pointerup', onEnd);
+            container.removeEventListener('pointercancel', onEnd);
+            container.removeEventListener('mousedown', onMouseDown);
+            container.removeEventListener('touchstart', onTouchStart);
+            container.removeEventListener('mousemove', onMouseMove);
+            container.removeEventListener('touchmove', onTouchMove);
+            container.removeEventListener('mouseup', onEnd);
+            container.removeEventListener('mouseleave', onEnd);
+            container.removeEventListener('touchend', onEnd);
+            container.removeEventListener('touchcancel', onEnd);
+            container.removeEventListener('contextmenu', onContextMenu);
+        };
+    }, [map, onLongPress]);
+
+    useMapEvents({
         mouseup() {
             cancelHold();
         },
@@ -585,9 +713,11 @@ function MapClickHandler({
                 return;
             }
 
-            const [startLat, startLng] = pressStart.current.position;
-            if (Math.abs(startLat - event.latlng.lat) > 0.0002 || Math.abs(startLng - event.latlng.lng) > 0.0002) {
+            const point = map.latLngToContainerPoint(event.latlng);
+            const threshold = pressStart.current.pointerType === 'touch' ? 18 : 10;
+            if (Math.abs(pressStart.current.pointX - point.x) > threshold || Math.abs(pressStart.current.pointY - point.y) > threshold) {
                 pressStart.current.moved = true;
+                cancelHold();
             }
         },
         touchmove(event) {
@@ -595,9 +725,11 @@ function MapClickHandler({
                 return;
             }
 
-            const [startLat, startLng] = pressStart.current.position;
-            if (Math.abs(startLat - event.latlng.lat) > 0.0002 || Math.abs(startLng - event.latlng.lng) > 0.0002) {
+            const point = map.latLngToContainerPoint(event.latlng);
+            const threshold = pressStart.current.pointerType === 'touch' ? 18 : 10;
+            if (Math.abs(pressStart.current.pointX - point.x) > threshold || Math.abs(pressStart.current.pointY - point.y) > threshold) {
                 pressStart.current.moved = true;
+                cancelHold();
             }
         },
         dragstart() {
@@ -608,6 +740,12 @@ function MapClickHandler({
         },
         contextmenu(event) {
             L.DomEvent.preventDefault(event.originalEvent);
+
+            if (!longPressTriggered.current) {
+                longPressTriggered.current = true;
+                onLongPress([event.latlng.lat, event.latlng.lng]);
+            }
+
             cancelHold();
         },
         click(event) {

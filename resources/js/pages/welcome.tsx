@@ -3,10 +3,12 @@ import { useTranslator } from '@/lib/i18n';
 import { type SharedData } from '@/types';
 import { Head, Link, usePage } from '@inertiajs/react';
 import { Compass, Fish, Route } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 export default function Welcome() {
     const { auth, name } = usePage<SharedData>().props;
     const { t } = useTranslator();
+    const [showMobileFeatures, setShowMobileFeatures] = useState(false);
     const features = [
         {
             title: t('welcome.feature_1_title'),
@@ -25,6 +27,21 @@ export default function Welcome() {
         },
     ];
 
+    useEffect(() => {
+        const onResize = () => {
+            if (window.innerWidth >= 640) {
+                setShowMobileFeatures(true);
+            } else {
+                setShowMobileFeatures(false);
+            }
+        };
+
+        onResize();
+        window.addEventListener('resize', onResize);
+
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
+
     return (
         <>
             <Head title="Home">
@@ -33,14 +50,14 @@ export default function Welcome() {
             </Head>
 
             <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(71,166,191,0.18),_transparent_40%),linear-gradient(180deg,_#f5fbfc_0%,_#eef6f7_100%)] text-slate-950">
-                <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-6 lg:px-8">
-                    <header className="flex items-center justify-between border-b border-slate-200/80 pb-5">
-                        <div>
+                <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+                    <header className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="max-w-xs sm:max-w-sm">
                             <p className="text-sm font-semibold tracking-[0.24em] text-teal-800 uppercase">Fishmap</p>
                             <p className="mt-1 text-sm text-slate-600">{t('welcome.tagline')}</p>
                         </div>
 
-                        <nav className="flex items-center gap-3">
+                        <nav className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
                             <LanguageToggle />
                             {!auth.user ? (
                                 <>
@@ -65,21 +82,21 @@ export default function Welcome() {
                         </nav>
                     </header>
 
-                    <main className="flex flex-1 flex-col justify-center py-12 lg:py-16">
+                    <main className="flex flex-1 flex-col justify-center py-10 sm:py-12 lg:py-16">
                         <section className="grid gap-10 lg:items-end">
                             <div className="max-w-3xl">
                                 <p className="mb-4 text-sm font-medium tracking-[0.24em] text-teal-800 uppercase">{t('welcome.project_badge')}</p>
                                 <h1
-                                    className="text-5xl leading-tight font-semibold tracking-tight text-slate-950 sm:text-6xl"
+                                    className="text-4xl leading-tight font-semibold tracking-tight text-slate-950 sm:text-5xl lg:text-6xl"
                                     style={{ fontFamily: 'Manrope, sans-serif' }}
                                 >
                                     {t('welcome.hero')}
                                 </h1>
-                                <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
+                                <p className="mt-5 max-w-2xl text-base leading-8 text-slate-600 sm:mt-6 sm:text-lg">
                                     {t('welcome.hero_copy', { name })}
                                 </p>
 
-                                <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                                <div className="mt-8 flex flex-col items-center gap-3 sm:items-start sm:flex-row">
                                     <Link
                                         href={auth.user ? route('dashboard') : route('register')}
                                         className="rounded-full bg-teal-800 px-5 py-3 text-center text-sm font-semibold text-white transition hover:bg-teal-700"
@@ -88,7 +105,13 @@ export default function Welcome() {
                                     </Link>
                                     <a
                                         href="#features"
-                                        className="rounded-full border border-slate-300 px-5 py-3 text-center text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
+                                        onClick={(event) => {
+                                            if (window.innerWidth < 640) {
+                                                event.preventDefault();
+                                                setShowMobileFeatures((current) => !current);
+                                            }
+                                        }}
+                                        className="rounded-full border border-slate-300 px-5 py-3 text-center text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-950 sm:hidden"
                                     >
                                         {t('welcome.included')}
                                     </a>
@@ -96,7 +119,7 @@ export default function Welcome() {
                             </div>
                         </section>
 
-                        <section id="features" className="mt-14 grid gap-4 md:grid-cols-3">
+                        <section id="features" className={`${showMobileFeatures ? 'grid' : 'hidden'} mt-12 gap-4 md:mt-14 md:grid md:grid-cols-3`}>
                             {features.map((feature) => (
                                 <article key={feature.title} className="rounded-[1.75rem] border border-slate-200/80 bg-white/80 p-6 shadow-sm">
                                     <feature.icon className="size-5 text-teal-800" />
