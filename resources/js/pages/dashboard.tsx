@@ -1,6 +1,7 @@
 import { CatchMap } from '@/components/catch-map';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useTranslator } from '@/lib/i18n';
 import { type BreadcrumbItem, type CatchLog, type SharedData } from '@/types';
 import AppLayout from '@/layouts/app-layout';
 import { Head, router, useForm, usePage } from '@inertiajs/react';
@@ -18,18 +19,18 @@ interface DashboardProps {
 
 type CatchFlowStep = 'action' | 'location-mode' | 'confirm-location' | 'details' | 'navigation' | 'delete' | 'success';
 
-const breadcrumbs: BreadcrumbItem[] = [
-    {
-        title: 'Fishmap',
-        href: '/dashboard',
-    },
-];
-
 const inputClassName =
     'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100';
 
 export default function Dashboard({ catchLogs, stats }: DashboardProps) {
     const { flash } = usePage<SharedData>().props;
+    const { t } = useTranslator();
+    const breadcrumbs: BreadcrumbItem[] = [
+        {
+            title: 'Fishmap',
+            href: '/dashboard',
+        },
+    ];
     const [dialogOpen, setDialogOpen] = useState(false);
     const [dialogStep, setDialogStep] = useState<CatchFlowStep>('action');
     const [isInitialMapLoading, setIsInitialMapLoading] = useState(true);
@@ -38,9 +39,10 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
     const [mapPickMode, setMapPickMode] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
     const [activeCatch, setActiveCatch] = useState<CatchLog | null>(null);
-    const [successTitle, setSuccessTitle] = useState('Fish added');
-    const [successMessage, setSuccessMessage] = useState('Your catch pin has been saved to Fishmap.');
+    const [successTitle, setSuccessTitle] = useState('');
+    const [successMessage, setSuccessMessage] = useState('');
     const successCloseTimer = useRef<number | null>(null);
+    const holdOpenTimer = useRef<number | null>(null);
 
     const form = useForm({
         species: '',
@@ -128,15 +130,19 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
         setDialogStep('action');
         setSubmitError(null);
         setActiveCatch(null);
-        setSuccessTitle('Fish added');
-        setSuccessMessage('Your catch pin has been saved to Fishmap.');
-    }, []);
+        setSuccessTitle(t('dashboard.fish_added'));
+        setSuccessMessage(t('dashboard.saved_copy'));
+    }, [t]);
 
     const openActionDialog = useCallback(
         (position?: [number, number] | null) => {
             if (successCloseTimer.current) {
                 window.clearTimeout(successCloseTimer.current);
                 successCloseTimer.current = null;
+            }
+            if (holdOpenTimer.current) {
+                window.clearTimeout(holdOpenTimer.current);
+                holdOpenTimer.current = null;
             }
 
             setActiveCatch(null);
@@ -204,6 +210,10 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
     }, [setCoordinates]);
 
     const beginPickAnotherSpot = useCallback(() => {
+        if (holdOpenTimer.current) {
+            window.clearTimeout(holdOpenTimer.current);
+            holdOpenTimer.current = null;
+        }
         setDialogOpen(false);
         setMapPickMode(true);
     }, []);
@@ -283,8 +293,8 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                 form.setData('caught_time', formatTimeForDisplay(now));
                 form.setData('visibility', 'private');
                 setSubmitError(null);
-                setSuccessTitle(activeCatch ? 'Fish updated' : 'Fish added');
-                setSuccessMessage(activeCatch ? 'Your catch pin has been updated.' : 'Your catch pin has been saved to Fishmap.');
+                setSuccessTitle(activeCatch ? t('dashboard.fish_updated') : t('dashboard.fish_added'));
+                setSuccessMessage(activeCatch ? t('dashboard.updated_copy') : t('dashboard.saved_copy'));
                 setDialogStep('success');
                 successCloseTimer.current = window.setTimeout(() => {
                     setDialogOpen(false);
@@ -315,8 +325,8 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                 setSubmitError('We could not delete this fish pin right now.');
             },
             onSuccess: () => {
-                setSuccessTitle('Fish deleted');
-                setSuccessMessage('The fish pin has been deleted.');
+                setSuccessTitle(t('dashboard.fish_deleted'));
+                setSuccessMessage(t('dashboard.deleted_copy'));
                 setDialogStep('success');
                 successCloseTimer.current = window.setTimeout(() => {
                     setDialogOpen(false);
@@ -332,7 +342,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
         saveFish();
     };
 
-    const latestTripLabel = stats.latest_trip ? new Date(stats.latest_trip).toLocaleDateString() : 'No trips yet';
+    const latestTripLabel = stats.latest_trip ? new Date(stats.latest_trip).toLocaleDateString() : t('dashboard.no_trips');
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -346,6 +356,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                     <CatchMap
                         catchLogs={catchLogs}
                         selectedPosition={selectedPosition}
+                        allowTapSelection={mapPickMode}
                         onSelectPosition={(position) => {
                             setCoordinates(position);
 
@@ -355,8 +366,20 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                 setDialogOpen(true);
                             }
                         }}
+                        onClearSelection={() => {
+                            form.setData('latitude', '');
+                            form.setData('longitude', '');
+                        }}
                         onLongPress={(position) => {
-                            openActionDialog(position);
+                            setCoordinates(position);
+
+                            if (holdOpenTimer.current) {
+                                window.clearTimeout(holdOpenTimer.current);
+                            }
+                            holdOpenTimer.current = window.setTimeout(() => {
+                                openActionDialog(position);
+                                holdOpenTimer.current = null;
+                            }, 120);
                         }}
                         onCurrentPositionChange={(position) => {
                             setCurrentTrackedPosition(position);
@@ -378,20 +401,18 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                     >
                         <div className="pointer-events-auto rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
                             <p className="text-xs font-semibold tracking-[0.22em] text-teal-800 uppercase">Fishmap</p>
-                            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Live map</h1>
-                            <p className="mt-2 text-sm leading-6 text-slate-600">
-                                Hold on the map for 2 seconds to add a fish or start navigation later.
-                            </p>
+                            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{t('dashboard.live_map')}</h1>
+                            <p className="mt-2 text-sm leading-6 text-slate-600">{t('dashboard.hold_map')}</p>
                         </div>
 
                         <div className="pointer-events-auto grid grid-cols-3 gap-3">
-                            <StatCard icon={Fish} label="Catches" value={stats.total_catches.toString()} />
-                            <StatCard icon={Globe} label="Public" value={stats.public_spots.toString()} />
-                            <StatCard icon={Waves} label="Latest" value={latestTripLabel} compact />
+                            <StatCard icon={Fish} label={t('dashboard.total_catches')} value={stats.total_catches.toString()} />
+                            <StatCard icon={Globe} label={t('dashboard.public')} value={stats.public_spots.toString()} />
+                            <StatCard icon={Waves} label={t('dashboard.latest')} value={latestTripLabel} compact />
                         </div>
 
                         {mapPickMode ? (
-                            <StatusBanner type="info" message="Tap the map to choose where the fish was caught." />
+                            <StatusBanner type="info" message={t('dashboard.tap_to_choose')} />
                         ) : flash.success ? (
                             <StatusBanner type="info" message={flash.success} />
                         ) : null}
@@ -416,7 +437,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
 
                         <Button type="button" className="h-14 rounded-full px-5 shadow-lg" onClick={() => openActionDialog(selectedPosition)}>
                             <Plus className="size-4" />
-                            Add fish
+                            {t('dashboard.add_fish')}
                         </Button>
                     </div>
 
@@ -430,21 +451,27 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                     window.clearTimeout(successCloseTimer.current);
                                     successCloseTimer.current = null;
                                 }
+                                if (holdOpenTimer.current) {
+                                    window.clearTimeout(holdOpenTimer.current);
+                                    holdOpenTimer.current = null;
+                                }
                                 resetDialogState();
                             }
                         }}
                     >
-                        <DialogContent className="left-1/2 top-auto bottom-0 max-h-[85vh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 rounded-t-[1.75rem] rounded-b-none border-slate-200 p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem]">
+                        <DialogContent
+                            onInteractOutside={(event) => event.preventDefault()}
+                            onPointerDownOutside={(event) => event.preventDefault()}
+                            className="left-1/2 top-auto bottom-0 max-h-[85vh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 rounded-t-[1.75rem] rounded-b-none border-slate-200 p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem]"
+                        >
                             <div className="relative p-6">
                                 <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
 
                                 {dialogStep === 'action' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">What do you want to do?</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600">
-                                                Use the current targeted map spot to start your next action.
-                                            </DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">{t('dashboard.what_do')}</DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600">{t('dashboard.what_do_copy')}</DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-6 grid gap-3">
@@ -453,8 +480,8 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                 onClick={() => setDialogStep('location-mode')}
                                                 className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-teal-300 hover:bg-teal-50"
                                             >
-                                                <p className="font-semibold text-slate-950">Add a fish</p>
-                                                <p className="mt-1 text-sm text-slate-600">Save a catch pin with species, size, time, and privacy.</p>
+                                                <p className="font-semibold text-slate-950">{t('dashboard.add_a_fish')}</p>
+                                                <p className="mt-1 text-sm text-slate-600">{t('dashboard.add_a_fish_copy')}</p>
                                             </button>
 
                                             <button
@@ -462,8 +489,8 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                 onClick={() => setDialogStep('navigation')}
                                                 className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-300"
                                             >
-                                                <p className="font-semibold text-slate-950">Start recording navigation</p>
-                                                <p className="mt-1 text-sm text-slate-600">This will be added later as the route-tracking flow.</p>
+                                                <p className="font-semibold text-slate-950">{t('dashboard.start_navigation')}</p>
+                                                <p className="mt-1 text-sm text-slate-600">{t('dashboard.start_navigation_copy')}</p>
                                             </button>
                                         </div>
                                     </>
@@ -472,19 +499,17 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                 {dialogStep === 'navigation' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">Navigation is coming later</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600">
-                                                We will build route recording after the add-fish flow is stable.
-                                            </DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">{t('dashboard.navigation_later')}</DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600">{t('dashboard.navigation_later_copy')}</DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-6 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                                            Fish catch logging is the current focus. Navigation recording will be the next major map feature.
+                                            {t('dashboard.navigation_focus')}
                                         </div>
 
                                         <div className="mt-6 flex justify-end">
                                             <Button type="button" onClick={() => setDialogStep('action')}>
-                                                Back
+                                                {t('dashboard.back')}
                                             </Button>
                                         </div>
                                     </>
@@ -493,10 +518,8 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                 {dialogStep === 'location-mode' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">Where was the fish caught?</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600">
-                                                You can use the targeted map location or pick another spot.
-                                            </DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">{t('dashboard.where_caught')}</DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600">{t('dashboard.where_caught_copy')}</DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-6 grid gap-3">
@@ -505,11 +528,11 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                 onClick={() => setDialogStep('confirm-location')}
                                                 className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-teal-300 hover:bg-teal-50"
                                             >
-                                                <p className="font-semibold text-slate-950">Use targeted location</p>
+                                                <p className="font-semibold text-slate-950">{t('dashboard.use_targeted')}</p>
                                                 <p className="mt-1 text-sm text-slate-600">
                                                     {selectedPosition
                                                         ? `${selectedPosition[0].toFixed(7)}, ${selectedPosition[1].toFixed(7)}`
-                                                        : 'Use the location button first if you want your current position.'}
+                                                        : t('dashboard.use_location_hint')}
                                                 </p>
                                             </button>
 
@@ -518,14 +541,14 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                 onClick={beginPickAnotherSpot}
                                                 className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-300"
                                             >
-                                                <p className="font-semibold text-slate-950">Pick another spot on the map</p>
-                                                <p className="mt-1 text-sm text-slate-600">Close this modal and tap the map where the fish was actually caught.</p>
+                                                <p className="font-semibold text-slate-950">{t('dashboard.pick_other')}</p>
+                                                <p className="mt-1 text-sm text-slate-600">{t('dashboard.pick_other_copy')}</p>
                                             </button>
                                         </div>
 
                                         <div className="mt-6 flex justify-between">
                                             <Button type="button" variant="outline" onClick={() => setDialogStep('action')}>
-                                                Back
+                                                {t('dashboard.back')}
                                             </Button>
                                         </div>
                                     </>
@@ -534,21 +557,19 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                 {dialogStep === 'confirm-location' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">Confirm catch location</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600">
-                                                Make sure the pin is where the fish was actually caught.
-                                            </DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">{t('dashboard.confirm_location')}</DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600">{t('dashboard.confirm_location_copy')}</DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-4 rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                                             <div className="flex items-start gap-3">
                                                 <MapPinned className="mt-0.5 size-4 text-teal-700" />
                                                 <div>
-                                                    <p className="font-medium text-slate-900">Selected spot</p>
+                                                    <p className="font-medium text-slate-900">{t('dashboard.selected_spot')}</p>
                                                     <p className="mt-1">
                                                         {selectedPosition
                                                             ? `${selectedPosition[0].toFixed(7)}, ${selectedPosition[1].toFixed(7)}`
-                                                            : 'No spot selected yet.'}
+                                                            : t('dashboard.no_spot')}
                                                     </p>
                                                 </div>
                                             </div>
@@ -556,10 +577,10 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
 
                                         <div className="mt-6 flex justify-between gap-3">
                                             <Button type="button" variant="outline" onClick={beginPickAnotherSpot}>
-                                                No, choose again
+                                                {t('dashboard.choose_again')}
                                             </Button>
                                             <Button type="button" disabled={!selectedPosition} onClick={continueToFishDetails}>
-                                                Yes, continue
+                                                {t('dashboard.continue')}
                                             </Button>
                                         </div>
                                     </>
@@ -569,17 +590,15 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                     <>
                                         <DialogHeader>
                                             <DialogTitle className="text-2xl tracking-tight text-slate-950">
-                                                {activeCatch ? 'Edit fish details' : 'Add fish details'}
+                                                {activeCatch ? t('dashboard.edit_details') : t('dashboard.add_details')}
                                             </DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600">
-                                                Update any part of this catch pin, including the optional notes, bait, photo, and location.
-                                            </DialogDescription>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600">{t('dashboard.details_copy')}</DialogDescription>
                                         </DialogHeader>
 
                                         {submitError ? <StatusBanner type="warning" message={submitError} /> : null}
 
                                         <form onSubmit={submit} className="mt-6 grid gap-4">
-                                            <Field label="Species" error={form.errors.species}>
+                                            <Field label={t('dashboard.species')} error={form.errors.species}>
                                                 <input
                                                     value={form.data.species}
                                                     onChange={(event) => form.setData('species', event.target.value)}
@@ -589,7 +608,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                             </Field>
 
                                             <div className="grid gap-4 sm:grid-cols-2">
-                                                <Field label="Bait used" error={form.errors.bait_used}>
+                                                <Field label={t('dashboard.bait_used')} error={form.errors.bait_used}>
                                                     <input
                                                         value={form.data.bait_used}
                                                         onChange={(event) => form.setData('bait_used', event.target.value)}
@@ -598,7 +617,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                     />
                                                 </Field>
 
-                                                <Field label="Photo URL" error={form.errors.photo_url}>
+                                                <Field label={t('dashboard.photo_url')} error={form.errors.photo_url}>
                                                     <input
                                                         type="url"
                                                         value={form.data.photo_url}
@@ -610,7 +629,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                             </div>
 
                                             <div className="grid gap-4 sm:grid-cols-2">
-                                                <Field label="Size (cm)" error={form.errors.fish_length_cm}>
+                                                <Field label={t('dashboard.size_cm')} error={form.errors.fish_length_cm}>
                                                     <input
                                                         type="number"
                                                         step="0.1"
@@ -621,7 +640,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                     />
                                                 </Field>
 
-                                                <Field label="Approx. weight (kg)" error={form.errors.fish_weight_kg}>
+                                                <Field label={t('dashboard.weight_kg')} error={form.errors.fish_weight_kg}>
                                                     <input
                                                         type="number"
                                                         step="0.01"
@@ -634,7 +653,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                             </div>
 
                                             <div className="grid gap-4 sm:grid-cols-2">
-                                                <Field label="Date (DD MM YYYY)">
+                                                <Field label={t('dashboard.date')}>
                                                     <input
                                                         value={form.data.caught_date}
                                                         onChange={(event) => form.setData('caught_date', event.target.value)}
@@ -643,7 +662,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                     />
                                                 </Field>
 
-                                                <Field label="Time (24h)">
+                                                <Field label={t('dashboard.time')}>
                                                     <input
                                                         value={form.data.caught_time}
                                                         onChange={(event) => form.setData('caught_time', event.target.value)}
@@ -653,18 +672,18 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                                 </Field>
                                             </div>
 
-                                            <Field label="Pin privacy">
+                                            <Field label={t('dashboard.privacy')}>
                                                 <select
                                                     value={form.data.visibility}
                                                     onChange={(event) => form.setData('visibility', event.target.value as 'private' | 'public')}
                                                     className={inputClassName}
                                                 >
-                                                    <option value="private">Private</option>
-                                                    <option value="public">Public</option>
+                                                    <option value="private">{t('dashboard.private')}</option>
+                                                    <option value="public">{t('dashboard.public_option')}</option>
                                                 </select>
                                             </Field>
 
-                                            <Field label="Notes" error={form.errors.notes}>
+                                            <Field label={t('dashboard.notes')} error={form.errors.notes}>
                                                 <textarea
                                                     value={form.data.notes}
                                                     onChange={(event) => form.setData('notes', event.target.value)}
@@ -675,21 +694,24 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
 
                                             <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                                                 {selectedPosition
-                                                    ? `Pin location: ${selectedPosition[0].toFixed(7)}, ${selectedPosition[1].toFixed(7)}`
-                                                    : 'No pin location selected yet.'}
+                                                    ? t('dashboard.pin_location', {
+                                                          lat: selectedPosition[0].toFixed(7),
+                                                          lng: selectedPosition[1].toFixed(7),
+                                                      })
+                                                    : t('dashboard.no_pin_location')}
                                             </div>
 
                                             <div className="flex items-center justify-between gap-3 border-t pt-4">
                                                 <div className="flex gap-3">
                                                     <Button type="button" variant="outline" onClick={() => setDialogStep('confirm-location')}>
-                                                        Change location
+                                                        {t('dashboard.change_location')}
                                                     </Button>
                                                     <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
-                                                        Cancel
+                                                        {t('common.cancel')}
                                                     </Button>
                                                 </div>
                                                 <Button type="button" disabled={form.processing || !selectedPosition} onClick={saveFish}>
-                                                    {form.processing ? 'Saving...' : activeCatch ? 'Save changes' : 'Save fish'}
+                                                    {form.processing ? t('common.saving') : activeCatch ? t('dashboard.save_changes') : t('dashboard.save_fish')}
                                                 </Button>
                                             </div>
                                         </form>
@@ -699,24 +721,22 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                 {dialogStep === 'delete' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">Delete fish pin?</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600">
-                                                This will remove the saved catch from your map history.
-                                            </DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950">{t('dashboard.delete_pin')}</DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600">{t('dashboard.delete_pin_copy')}</DialogDescription>
                                         </DialogHeader>
 
                                         {submitError ? <StatusBanner type="warning" message={submitError} /> : null}
 
                                         <div className="mt-5 rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                                            {activeCatch ? `You are deleting ${activeCatch.species}. This cannot be undone.` : 'No catch selected.'}
+                                            {activeCatch ? t('dashboard.delete_selected', { species: activeCatch.species }) : t('dashboard.no_spot')}
                                         </div>
 
                                         <div className="mt-6 flex items-center justify-between gap-3">
                                             <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
-                                                Cancel
+                                                {t('common.cancel')}
                                             </Button>
                                             <Button type="button" variant="destructive" onClick={deleteFish}>
-                                                Delete fish
+                                                {t('dashboard.delete_fish')}
                                             </Button>
                                         </div>
                                     </>
@@ -728,9 +748,7 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                             <CheckCircle2 className="size-8" />
                                         </div>
                                         <h3 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950">{successTitle}</h3>
-                                        <p className="mt-2 text-sm leading-6 text-slate-600">
-                                            {successMessage}
-                                        </p>
+                                        <p className="mt-2 text-sm leading-6 text-slate-600">{successMessage}</p>
                                     </div>
                                 ) : null}
 
@@ -739,10 +757,8 @@ export default function Dashboard({ catchLogs, stats }: DashboardProps) {
                                         <div className="flex size-16 items-center justify-center rounded-full bg-teal-50 text-teal-700">
                                             <LoaderCircle className="size-8 animate-spin" />
                                         </div>
-                                        <h3 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950">Saving fish</h3>
-                                        <p className="mt-2 text-sm leading-6 text-slate-600">
-                                            Adding your catch pin to Fishmap now.
-                                        </p>
+                                        <h3 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950">{t('dashboard.saving_fish')}</h3>
+                                        <p className="mt-2 text-sm leading-6 text-slate-600">{t('dashboard.saving_fish_copy')}</p>
                                     </div>
                                 ) : null}
                             </div>
