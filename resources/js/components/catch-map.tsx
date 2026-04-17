@@ -1,13 +1,16 @@
 import { useTranslator } from '@/lib/i18n';
-import { type CatchLog } from '@/types';
+import { type CatchLog, type NavigationRoute } from '@/types';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { Fish } from 'lucide-react';
 
 interface CatchMapProps {
     catchLogs: CatchLog[];
+    navigationRoutes: NavigationRoute[];
+    activeRoutePoints: [number, number][];
+    positionOverride: [number, number] | null;
     selectedPosition: [number, number] | null;
     allowTapSelection: boolean;
     onSelectPosition: (position: [number, number]) => void;
@@ -19,6 +22,8 @@ interface CatchMapProps {
     onLongPress: (position: [number, number]) => void;
     onEditCatch: (catchLog: CatchLog) => void;
     onDeleteCatch: (catchLog: CatchLog) => void;
+    onEditRoute: (route: NavigationRoute) => void;
+    onDeleteRoute: (route: NavigationRoute) => void;
 }
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
@@ -27,6 +32,9 @@ type BaseLayerMode = 'street' | 'nautical' | 'satellite';
 
 export function CatchMap({
     catchLogs,
+    navigationRoutes,
+    activeRoutePoints,
+    positionOverride,
     selectedPosition,
     allowTapSelection,
     onSelectPosition,
@@ -38,6 +46,8 @@ export function CatchMap({
     onLongPress,
     onEditCatch,
     onDeleteCatch,
+    onEditRoute,
+    onDeleteRoute,
 }: CatchMapProps) {
     const { t } = useTranslator();
     const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(null);
@@ -123,15 +133,27 @@ export function CatchMap({
         }
     }, [currentPosition, recenterToCurrentSignal]);
 
-    const initialCenter = currentPosition ?? (catchPoints.length > 0 ? ([catchPoints[0].latitude, catchPoints[0].longitude] as [number, number]) : defaultCenter);
+    const displayedPosition = positionOverride ?? currentPosition;
+
+    const routeLines = navigationRoutes
+        .map((route) => ({
+            ...route,
+            latlngs: route.points
+                .map((point) => [Number(point.latitude), Number(point.longitude)] as [number, number])
+                .filter(([latitude, longitude]) => Number.isFinite(latitude) && Number.isFinite(longitude)),
+        }))
+        .filter((route) => route.latlngs.length >= 2);
+
+    const initialCenter =
+        displayedPosition ?? (catchPoints.length > 0 ? ([catchPoints[0].latitude, catchPoints[0].longitude] as [number, number]) : defaultCenter);
 
     const displayAccuracyRadius = useMemo(() => {
-        if (!currentPosition || !locationAccuracy || locationAccuracy <= 30) {
+        if (!displayedPosition || !locationAccuracy || locationAccuracy <= 30 || positionOverride) {
             return null;
         }
 
         return Math.min(Math.max(locationAccuracy / 4, 12), 40);
-    }, [currentPosition, locationAccuracy]);
+    }, [displayedPosition, locationAccuracy, positionOverride]);
 
     return (
         <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[#0f172a] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
@@ -190,11 +212,11 @@ export function CatchMap({
                     />
                 ) : null}
 
-                {currentPosition ? (
+                {displayedPosition ? (
                     <>
                         {displayAccuracyRadius ? (
                             <CircleMarker
-                                center={currentPosition}
+                                center={displayedPosition}
                                 radius={displayAccuracyRadius}
                                 pathOptions={{
                                     color: '#38bdf8',
@@ -206,7 +228,7 @@ export function CatchMap({
                         ) : null}
 
                         <CircleMarker
-                            center={currentPosition}
+                            center={displayedPosition}
                             radius={10}
                             pathOptions={{
                                 color: '#0f172a',
@@ -216,12 +238,67 @@ export function CatchMap({
                             }}
                         >
                             <Popup>
-                                {locationAccuracy
+                                {positionOverride
+                                    ? t('dashboard.simulated_position')
+                                    : locationAccuracy
                                     ? t('dashboard.you_are_here_accuracy', { accuracy: locationAccuracy })
                                     : t('dashboard.you_are_here')}
                             </Popup>
                         </CircleMarker>
                     </>
+                ) : null}
+
+                {routeLines.map((route) => (
+                    <Polyline
+                        key={`route-${route.id}`}
+                        positions={route.latlngs}
+                        pathOptions={{
+                            color: route.is_owner ? '#f59e0b' : '#60a5fa',
+                            weight: 4,
+                            opacity: 0.8,
+                        }}
+                    >
+                        <Popup>
+                            <div className="space-y-1">
+                                <p className="font-semibold text-slate-950">{route.name}</p>
+                                <p className="text-sm text-slate-600">
+                                    {t('dashboard.route_points', { count: route.point_count })}
+                                </p>
+                                {route.owner_name && !route.is_owner ? (
+                                    <p className="text-sm text-slate-600">{t('dashboard.shared_by', { name: route.owner_name })}</p>
+                                ) : null}
+                                {route.is_owner ? (
+                                    <div className="flex gap-2 pt-2">
+                                        <button
+                                            type="button"
+                                            className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white"
+                                            onClick={() => onEditRoute(route)}
+                                        >
+                                            {t('dashboard.edit')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700"
+                                            onClick={() => onDeleteRoute(route)}
+                                        >
+                                            {t('dashboard.delete')}
+                                        </button>
+                                    </div>
+                                ) : null}
+                            </div>
+                        </Popup>
+                    </Polyline>
+                ))}
+
+                {activeRoutePoints.length >= 2 ? (
+                    <Polyline
+                        positions={activeRoutePoints}
+                        pathOptions={{
+                            color: '#22c55e',
+                            weight: 5,
+                            opacity: 0.95,
+                        }}
+                    />
                 ) : null}
 
                 {selectedPosition ? (

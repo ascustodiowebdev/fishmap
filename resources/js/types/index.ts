@@ -51,6 +51,24 @@ export interface CatchLog {
     created_at: string;
 }
 
+export interface NavigationRoutePoint {
+    latitude: string;
+    longitude: string;
+    recorded_at: string | null;
+}
+
+export interface NavigationRoute {
+    id: number;
+    name: string;
+    visibility: 'private' | 'public';
+    started_at: string | null;
+    ended_at: string | null;
+    point_count: number;
+    owner_name?: string | null;
+    is_owner?: boolean;
+    points: NavigationRoutePoint[];
+}
+
 export interface User {
     id: number;
     name: string;
