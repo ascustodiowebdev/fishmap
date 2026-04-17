@@ -77,15 +77,6 @@ Current goals:
 - select a catch spot directly from the map
 - use a realistic satellite-style layer when a MapTiler API key is configured
 
-### 3. Portfolio-Friendly Project Structure
-
-The project is being developed with:
-
-- feature-based commits
-- a public GitHub repository
-- clean environment variable handling
-- incremental, trackable improvements
-
 ## Local Development
 
 ### Requirements
