@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\CatchLog;
+use App\Models\NavigationRoute;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -43,8 +44,35 @@ class CatchLogController extends Controller
 
         $ownCatchLogs = $catchLogs->where('is_owner', true);
 
+        $navigationRoutes = NavigationRoute::query()
+            ->with('user:id,name', 'points:id,navigation_route_id,latitude,longitude,recorded_at,sequence')
+            ->where(function ($query) {
+                $query
+                    ->where('user_id', Auth::id())
+                    ->orWhere('visibility', 'public');
+            })
+            ->latest('started_at')
+            ->limit(12)
+            ->get()
+            ->map(fn (NavigationRoute $route) => [
+                'id' => $route->id,
+                'name' => $route->name,
+                'visibility' => $route->visibility,
+                'started_at' => optional($route->started_at)?->toIso8601String(),
+                'ended_at' => optional($route->ended_at)?->toIso8601String(),
+                'point_count' => $route->point_count,
+                'owner_name' => $route->user?->name,
+                'is_owner' => $route->user_id === Auth::id(),
+                'points' => $route->points->map(fn ($point) => [
+                    'latitude' => (string) $point->latitude,
+                    'longitude' => (string) $point->longitude,
+                    'recorded_at' => optional($point->recorded_at)?->toIso8601String(),
+                ])->values(),
+            ]);
+
         return Inertia::render('dashboard', [
             'catchLogs' => $catchLogs,
+            'navigationRoutes' => $navigationRoutes,
             'stats' => [
                 'total_catches' => $ownCatchLogs->count(),
                 'public_spots' => $ownCatchLogs->where('visibility', 'public')->count(),

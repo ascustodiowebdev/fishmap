@@ -51,4 +51,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(CatchLog::class);
     }
+
+    public function navigationRoutes(): HasMany
+    {
+        return $this->hasMany(NavigationRoute::class);
+    }
 }
