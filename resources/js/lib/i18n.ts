@@ -6,6 +6,7 @@ export type Locale = 'en' | 'pt';
 const translations = {
     en: {
         'app.dashboard': 'Dashboard',
+        'app.home': 'Home',
         'app.catches': 'Catches',
         'app.repository': 'Repository',
         'app.documentation': 'Documentation',
@@ -190,6 +191,7 @@ const translations = {
     },
     pt: {
         'app.dashboard': 'Painel',
+        'app.home': 'Início',
         'app.catches': 'Capturas',
         'app.repository': 'Repositório',
         'app.documentation': 'Documentação',

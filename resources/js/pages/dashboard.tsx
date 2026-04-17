@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { useTranslator } from '@/lib/i18n';
 import { type BreadcrumbItem, type CatchLog, type NavigationRoute, type SharedData } from '@/types';
 import AppLayout from '@/layouts/app-layout';
-import { Head, router, useForm, usePage } from '@inertiajs/react';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Plus, Waves } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -726,7 +726,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         }`}
                     >
                         <div className="pointer-events-auto rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
-                            <p className="text-xs font-semibold tracking-[0.22em] text-teal-800 uppercase">Fishmap</p>
+                            <div className="flex items-center justify-between gap-3">
+                                <p className="text-xs font-semibold tracking-[0.22em] text-teal-800 uppercase">Fishmap</p>
+                                <Link href={route('home')} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950">
+                                    {t('app.home')}
+                                </Link>
+                            </div>
                             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{t('dashboard.live_map')}</h1>
                             <p className="mt-2 text-sm leading-6 text-slate-600">{t('dashboard.hold_map')}</p>
                         </div>

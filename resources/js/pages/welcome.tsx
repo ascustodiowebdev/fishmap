@@ -54,7 +54,14 @@ export default function Welcome() {
                                         {t('welcome.create_account')}
                                     </Link>
                                 </>
-                            ) : null}
+                            ) : (
+                                <Link
+                                    href={route('profile.edit')}
+                                    className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-950 transition hover:border-slate-400"
+                                >
+                                    {t('app.settings')}
+                                </Link>
+                            )}
                         </nav>
                     </header>
 
