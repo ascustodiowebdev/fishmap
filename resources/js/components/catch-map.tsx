@@ -1,10 +1,10 @@
 import { useTranslator } from '@/lib/i18n';
-import { type CatchLog, type NavigationRoute } from '@/types';
+import { type CatchLog, type MapBounds, type NavigationRoute } from '@/types';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
-import { Fish, Layers3 } from 'lucide-react';
+import { Download, Fish, Layers3 } from 'lucide-react';
 
 interface CatchMapProps {
     catchLogs: CatchLog[];
@@ -19,11 +19,17 @@ interface CatchMapProps {
     onInteractionChange: (isInteracting: boolean) => void;
     recenterToCurrentSignal: number;
     onInitialLoadChange: (isLoading: boolean) => void;
+    onBoundsChange: (bounds: MapBounds) => void;
     onLongPress: (position: [number, number]) => void;
     onEditCatch: (catchLog: CatchLog) => void;
     onDeleteCatch: (catchLog: CatchLog) => void;
     onEditRoute: (route: NavigationRoute) => void;
     onDeleteRoute: (route: NavigationRoute) => void;
+    onOpenRouteInGoogleMaps: (route: NavigationRoute) => void;
+    onExportVisible: () => void;
+    onExportRouteKml: (route: NavigationRoute) => void;
+    onExportRouteGpx: (route: NavigationRoute) => void;
+    canRecordRoutes: boolean;
 }
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
@@ -44,11 +50,17 @@ export function CatchMap({
     onInteractionChange,
     recenterToCurrentSignal,
     onInitialLoadChange,
+    onBoundsChange,
     onLongPress,
     onEditCatch,
     onDeleteCatch,
     onEditRoute,
     onDeleteRoute,
+    onOpenRouteInGoogleMaps,
+    onExportVisible,
+    onExportRouteKml,
+    onExportRouteGpx,
+    canRecordRoutes,
 }: CatchMapProps) {
     const { t } = useTranslator();
     const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(null);
@@ -170,6 +182,7 @@ export function CatchMap({
             <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
                 <MapViewport focusRequest={focusRequest} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
+                <MapBoundsBridge onBoundsChange={onBoundsChange} />
                 <MapClickHandler allowTapSelection={allowTapSelection} onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
 
                 <TileLayer
@@ -268,33 +281,47 @@ export function CatchMap({
                             opacity: 0.8,
                         }}
                     >
-                        <Popup>
-                            <div className="space-y-1">
-                                <p className="font-semibold text-slate-950">{route.name}</p>
-                                <p className="text-sm text-slate-600">
-                                    {t('dashboard.route_points', { count: route.point_count })}
-                                </p>
-                                {route.owner_name && !route.is_owner ? (
-                                    <p className="text-sm text-slate-600">{t('dashboard.shared_by', { name: route.owner_name })}</p>
-                                ) : null}
-                                {route.is_owner ? (
-                                    <div className="flex gap-2 pt-2">
-                                        <button
-                                            type="button"
-                                            className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white"
-                                            onClick={() => onEditRoute(route)}
-                                        >
-                                            {t('dashboard.edit')}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700"
-                                            onClick={() => onDeleteRoute(route)}
-                                        >
-                                            {t('dashboard.delete')}
-                                        </button>
-                                    </div>
-                                ) : null}
+                        <Popup className="fishmap-popup fishmap-popup--route">
+                            <div className="fishmap-popup-card">
+                                <div className="space-y-1">
+                                    <p className="fishmap-popup-title">{route.name}</p>
+                                    <p className="fishmap-popup-copy">
+                                        {t('dashboard.route_points', { count: route.point_count })}
+                                    </p>
+                                    {route.owner_name && !route.is_owner ? (
+                                        <p className="fishmap-popup-copy">{t('dashboard.shared_by', { name: route.owner_name })}</p>
+                                    ) : null}
+                                </div>
+
+                                <div className="fishmap-popup-actions">
+                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--secondary" onClick={() => onOpenRouteInGoogleMaps(route)}>
+                                        {t('dashboard.open_in_google_maps')}
+                                    </button>
+                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--outline" onClick={() => onExportRouteKml(route)}>
+                                        {t('dashboard.export_route_kml')}
+                                    </button>
+                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--outline" onClick={() => onExportRouteGpx(route)}>
+                                        {t('dashboard.export_route_gpx')}
+                                    </button>
+                                    {route.is_owner && canRecordRoutes ? (
+                                        <>
+                                            <button
+                                                type="button"
+                                                className="fishmap-popup-button fishmap-popup-button--primary"
+                                                onClick={() => onEditRoute(route)}
+                                            >
+                                                {t('dashboard.edit')}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="fishmap-popup-button fishmap-popup-button--danger"
+                                                onClick={() => onDeleteRoute(route)}
+                                            >
+                                                {t('dashboard.delete')}
+                                            </button>
+                                        </>
+                                    ) : null}
+                                </div>
                             </div>
                         </Popup>
                     </Polyline>
@@ -368,29 +395,31 @@ export function CatchMap({
                             },
                         }}
                     >
-                        <Popup>
-                            <div className="space-y-1">
-                                <p className="font-semibold text-slate-950">{catchLog.species}</p>
-                                {!catchLog.is_owner && catchLog.owner_name ? (
-                                    <p className="text-sm text-slate-600">{t('dashboard.shared_by', { name: catchLog.owner_name })}</p>
-                                ) : null}
-                                <p className="text-sm text-slate-600">
-                                    {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
-                                </p>
-                                {catchLog.bait_used ? <p className="text-sm text-slate-600">{t('dashboard.bait_prefix', { bait: catchLog.bait_used })}</p> : null}
-                                {catchLog.notes ? <p className="text-sm text-slate-600">{catchLog.notes}</p> : null}
+                        <Popup className="fishmap-popup fishmap-popup--catch">
+                            <div className="fishmap-popup-card">
+                                <div className="space-y-1">
+                                    <p className="fishmap-popup-title">{catchLog.species}</p>
+                                    {!catchLog.is_owner && catchLog.owner_name ? (
+                                        <p className="fishmap-popup-copy">{t('dashboard.shared_by', { name: catchLog.owner_name })}</p>
+                                    ) : null}
+                                    <p className="fishmap-popup-copy">
+                                        {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
+                                    </p>
+                                    {catchLog.bait_used ? <p className="fishmap-popup-copy">{t('dashboard.bait_prefix', { bait: catchLog.bait_used })}</p> : null}
+                                    {catchLog.notes ? <p className="fishmap-popup-copy">{catchLog.notes}</p> : null}
+                                </div>
                                 {catchLog.is_owner ? (
-                                    <div className="flex gap-2 pt-2">
+                                    <div className="fishmap-popup-actions">
                                         <button
                                             type="button"
-                                            className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white"
+                                            className="fishmap-popup-button fishmap-popup-button--primary"
                                             onClick={() => onEditCatch(catchLog)}
                                         >
                                             {t('dashboard.edit')}
                                         </button>
                                         <button
                                             type="button"
-                                            className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700"
+                                            className="fishmap-popup-button fishmap-popup-button--danger"
                                             onClick={() => onDeleteCatch(catchLog)}
                                         >
                                             {t('dashboard.delete')}
@@ -412,6 +441,15 @@ export function CatchMap({
             ) : null}
 
             <div className="absolute bottom-14 left-3 z-[500] md:bottom-5 md:left-5">
+                <button
+                    type="button"
+                    onClick={onExportVisible}
+                    className="mb-2 flex items-center gap-2 rounded-full border border-white/15 bg-slate-900/72 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-white shadow-lg backdrop-blur transition hover:bg-slate-900/85 md:mb-3"
+                >
+                    <Download className="size-4" />
+                    <span className="uppercase">{t('dashboard.export_visible')}</span>
+                </button>
+
                 <button
                     type="button"
                     onClick={cycleLayer}
@@ -535,6 +573,31 @@ function MapInteractionBridge({ onInteractionChange }: { onInteractionChange: (i
         zoomend() {
             onInteractionChange(false);
         },
+    });
+
+    return null;
+}
+
+function MapBoundsBridge({ onBoundsChange }: { onBoundsChange: (bounds: MapBounds) => void }) {
+    const map = useMap();
+
+    const emitBounds = useCallback(() => {
+        const bounds = map.getBounds();
+        onBoundsChange({
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest(),
+        });
+    }, [map, onBoundsChange]);
+
+    useEffect(() => {
+        emitBounds();
+    }, [emitBounds]);
+
+    useMapEvents({
+        moveend: emitBounds,
+        zoomend: emitBounds,
     });
 
     return null;

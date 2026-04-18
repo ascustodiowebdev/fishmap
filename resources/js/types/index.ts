@@ -74,6 +74,13 @@ export interface NavigationRoute {
     points: NavigationRoutePoint[];
 }
 
+export interface MapBounds {
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+}
+
 export interface User {
     id: number;
     name: string;
