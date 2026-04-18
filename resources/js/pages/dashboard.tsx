@@ -2,7 +2,7 @@ import { CatchMap } from '@/components/catch-map';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useTranslator } from '@/lib/i18n';
-import { type BreadcrumbItem, type CatchLog, type NavigationRoute, type SharedData } from '@/types';
+import { type BreadcrumbItem, type CatchLog, type MapBounds, type NavigationRoute, type SharedData } from '@/types';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Waves, X } from 'lucide-react';
@@ -25,8 +25,9 @@ const inputClassName =
     'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-teal-400 dark:focus:ring-teal-900/40';
 
 export default function Dashboard({ catchLogs, navigationRoutes, stats }: DashboardProps) {
-    const { flash } = usePage<SharedData>().props;
+    const { flash, auth } = usePage<SharedData>().props;
     const { t } = useTranslator();
+    const canRecordRoutes = Boolean(auth.user?.is_admin);
     const breadcrumbs: BreadcrumbItem[] = [
         {
             title: 'Fishmap',
@@ -58,6 +59,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const [activeRoute, setActiveRoute] = useState<NavigationRoute | null>(null);
     const [routeSubmitError, setRouteSubmitError] = useState<string | null>(null);
     const [mobileHudOpen, setMobileHudOpen] = useState(false);
+    const [visibleBounds, setVisibleBounds] = useState<MapBounds | null>(null);
 
     const form = useForm({
         species: '',
@@ -95,6 +97,43 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
 
     const displayTrackedPosition = routeSimulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
     const activeRoutePolyline = activeRoutePoints.map((point) => [point.latitude, point.longitude] as [number, number]);
+
+    const isPointVisible = useCallback((latitude: number, longitude: number) => {
+        if (!visibleBounds) {
+            return true;
+        }
+
+        return (
+            latitude <= visibleBounds.north &&
+            latitude >= visibleBounds.south &&
+            longitude <= visibleBounds.east &&
+            longitude >= visibleBounds.west
+        );
+    }, [visibleBounds]);
+
+    const visibleCatchLogs = useMemo(
+        () =>
+            catchLogs.filter((catchLog) => {
+                const latitude = Number(catchLog.latitude);
+                const longitude = Number(catchLog.longitude);
+
+                return Number.isFinite(latitude) && Number.isFinite(longitude) && isPointVisible(latitude, longitude);
+            }),
+        [catchLogs, isPointVisible],
+    );
+
+    const visibleNavigationRoutes = useMemo(
+        () =>
+            navigationRoutes.filter((navigationRoute) =>
+                navigationRoute.points.some((point) => {
+                    const latitude = Number(point.latitude);
+                    const longitude = Number(point.longitude);
+
+                    return Number.isFinite(latitude) && Number.isFinite(longitude) && isPointVisible(latitude, longitude);
+                }),
+            ),
+        [isPointVisible, navigationRoutes],
+    );
 
     useEffect(() => {
         if (!routeSimulationEnabled && !isRecordingRoute) {
@@ -350,8 +389,207 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         );
     }, [setCoordinates]);
 
+    const openRouteInGoogleMaps = useCallback((navigationRoute: NavigationRoute) => {
+        const routePoints = navigationRoute.points
+            .map((point) => [Number(point.latitude), Number(point.longitude)] as [number, number])
+            .filter(([latitude, longitude]) => Number.isFinite(latitude) && Number.isFinite(longitude));
+
+        if (routePoints.length < 2) {
+            return;
+        }
+
+        const origin = routePoints[0];
+        const destination = routePoints[routePoints.length - 1];
+        const maxWaypoints = 3;
+        const waypointIndexes = Array.from({ length: maxWaypoints }, (_, index) =>
+            Math.round(((index + 1) * (routePoints.length - 2)) / (maxWaypoints + 1)),
+        )
+            .filter((index) => index > 0 && index < routePoints.length - 1)
+            .filter((value, index, array) => array.indexOf(value) === index);
+
+        const waypoints = waypointIndexes.map((index) => routePoints[index]).map(([latitude, longitude]) => `${latitude},${longitude}`);
+
+        const url = new URL('https://www.google.com/maps/dir/');
+        url.searchParams.set('api', '1');
+        url.searchParams.set('origin', `${origin[0]},${origin[1]}`);
+        url.searchParams.set('destination', `${destination[0]},${destination[1]}`);
+        url.searchParams.set('travelmode', 'driving');
+
+        if (waypoints.length > 0) {
+            url.searchParams.set('waypoints', waypoints.join('|'));
+        }
+
+        window.open(url.toString(), '_blank', 'noopener,noreferrer');
+    }, []);
+
+    const buildRouteKml = useCallback((navigationRoute: NavigationRoute) => {
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${escapeXml(navigationRoute.name)}</name>
+    <Placemark>
+      <name>${escapeXml(navigationRoute.name)}</name>
+      <description>${escapeXml(`${navigationRoute.owner_name ?? 'Fishmap'} • ${navigationRoute.visibility}`)}</description>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          ${navigationRoute.points.map((point) => `${point.longitude},${point.latitude},0`).join(' ')}
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+    }, []);
+
+    const buildRouteGpx = useCallback((navigationRoute: NavigationRoute) => {
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Fishmap" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>${escapeXml(navigationRoute.name)}</name>
+    <trkseg>
+      ${navigationRoute.points
+          .map(
+              (point) => `
+      <trkpt lat="${point.latitude}" lon="${point.longitude}">
+        ${point.recorded_at ? `<time>${point.recorded_at}</time>` : ''}
+      </trkpt>`,
+          )
+          .join('')}
+    </trkseg>
+  </trk>
+</gpx>`;
+    }, []);
+
+    const downloadTextFile = useCallback((filename: string, content: string, mimeType: string) => {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+    }, []);
+
+    const exportRouteKml = useCallback((navigationRoute: NavigationRoute) => {
+        const safeName = navigationRoute.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '') || 'route';
+        downloadTextFile(`${safeName}.kml`, buildRouteKml(navigationRoute), 'application/vnd.google-earth.kml+xml;charset=utf-8');
+    }, [buildRouteKml, downloadTextFile]);
+
+    const exportRouteGpx = useCallback((navigationRoute: NavigationRoute) => {
+        const safeName = navigationRoute.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '') || 'route';
+        downloadTextFile(`${safeName}.gpx`, buildRouteGpx(navigationRoute), 'application/gpx+xml;charset=utf-8');
+    }, [buildRouteGpx, downloadTextFile]);
+
+    const buildVisibleKml = useCallback(() => {
+        const placemarks = visibleCatchLogs
+            .map(
+                (catchLog) => `
+        <Placemark>
+            <name>${escapeXml(catchLog.species)}</name>
+            <description>${escapeXml(
+                `${catchLog.owner_name ?? 'Fishmap'} • ${catchLog.visibility} • ${catchLog.caught_at ?? ''}`,
+            )}</description>
+            <Point><coordinates>${catchLog.longitude},${catchLog.latitude},0</coordinates></Point>
+        </Placemark>`,
+            )
+            .join('');
+
+        const routes = visibleNavigationRoutes
+            .map(
+                (navigationRoute) => `
+        <Placemark>
+            <name>${escapeXml(navigationRoute.name)}</name>
+            <description>${escapeXml(`${navigationRoute.owner_name ?? 'Fishmap'} • ${navigationRoute.visibility}`)}</description>
+            <LineString>
+                <tessellate>1</tessellate>
+                <coordinates>
+                    ${navigationRoute.points.map((point) => `${point.longitude},${point.latitude},0`).join(' ')}
+                </coordinates>
+            </LineString>
+        </Placemark>`,
+            )
+            .join('');
+
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Fishmap visible export</name>
+    ${placemarks}
+    ${routes}
+  </Document>
+</kml>`;
+    }, [visibleCatchLogs, visibleNavigationRoutes]);
+
+    const buildVisibleGpx = useCallback(() => {
+        const waypoints = visibleCatchLogs
+            .map(
+                (catchLog) => `
+  <wpt lat="${catchLog.latitude}" lon="${catchLog.longitude}">
+    <name>${escapeXml(catchLog.species)}</name>
+    <desc>${escapeXml(`${catchLog.owner_name ?? 'Fishmap'} • ${catchLog.visibility}`)}</desc>
+  </wpt>`,
+            )
+            .join('');
+
+        const tracks = visibleNavigationRoutes
+            .map(
+                (navigationRoute) => `
+  <trk>
+    <name>${escapeXml(navigationRoute.name)}</name>
+    <trkseg>
+      ${navigationRoute.points
+          .map(
+              (point) => `
+      <trkpt lat="${point.latitude}" lon="${point.longitude}">
+        ${point.recorded_at ? `<time>${point.recorded_at}</time>` : ''}
+      </trkpt>`,
+          )
+          .join('')}
+    </trkseg>
+  </trk>`,
+            )
+            .join('');
+
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Fishmap" xmlns="http://www.topografix.com/GPX/1/1">
+${waypoints}
+${tracks}
+</gpx>`;
+    }, [visibleCatchLogs, visibleNavigationRoutes]);
+
+    const exportVisible = useCallback(() => {
+        if (visibleCatchLogs.length === 0 && visibleNavigationRoutes.length === 0) {
+            return;
+        }
+
+        const choice = window.prompt('Export format: type KML or GPX', 'KML');
+        if (!choice) {
+            return;
+        }
+
+        const format = choice.trim().toLowerCase();
+        const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+
+        if (format === 'gpx') {
+            downloadTextFile(`fishmap-visible-${timestamp}.gpx`, buildVisibleGpx(), 'application/gpx+xml;charset=utf-8');
+            return;
+        }
+
+        downloadTextFile(
+            `fishmap-visible-${timestamp}.kml`,
+            buildVisibleKml(),
+            'application/vnd.google-earth.kml+xml;charset=utf-8',
+        );
+    }, [buildVisibleGpx, buildVisibleKml, downloadTextFile, visibleCatchLogs.length, visibleNavigationRoutes.length]);
+
     const startRouteRecording = useCallback(
         (forcedStartPosition?: [number, number] | null) => {
+            if (!canRecordRoutes) {
+                return;
+            }
+
             const startPosition = forcedStartPosition ?? (routeSimulationEnabled ? simulatedPosition ?? currentTrackedPosition ?? [38.7223, -9.1393] : currentTrackedPosition);
 
             if (!startPosition) {
@@ -385,10 +623,14 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 setSimulatedPosition(startPosition);
             }
         },
-        [currentTrackedPosition, routeSimulationEnabled, simulatedPosition, t],
+        [canRecordRoutes, currentTrackedPosition, routeSimulationEnabled, simulatedPosition, t],
     );
 
     const stopRouteRecording = useCallback(() => {
+        if (!canRecordRoutes) {
+            return;
+        }
+
         if (!isRecordingRoute || activeRoutePoints.length < 2 || !recordingStartedAt) {
             setIsRecordingRoute(false);
             setActiveRoutePoints([]);
@@ -405,25 +647,33 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         setRouteSubmitError(null);
         setActiveRoute(null);
         populateRouteForm(null, recordingStartedAt, endedAt);
-    }, [activeRoutePoints.length, isRecordingRoute, populateRouteForm, recordingStartedAt]);
+    }, [activeRoutePoints.length, canRecordRoutes, isRecordingRoute, populateRouteForm, recordingStartedAt]);
 
     const openRouteEditDialog = useCallback(
         (navigationRoute: NavigationRoute) => {
+            if (!canRecordRoutes) {
+                return;
+            }
+
             setActiveRoute(navigationRoute);
             setRouteDialogMode('edit');
             setRouteDialogOpen(true);
             setRouteSubmitError(null);
             populateRouteForm(navigationRoute);
         },
-        [populateRouteForm],
+        [canRecordRoutes, populateRouteForm],
     );
 
     const openRouteDeleteDialog = useCallback((navigationRoute: NavigationRoute) => {
+        if (!canRecordRoutes) {
+            return;
+        }
+
         setActiveRoute(navigationRoute);
         setRouteDialogMode('delete');
         setRouteDialogOpen(true);
         setRouteSubmitError(null);
-    }, []);
+    }, [canRecordRoutes]);
 
     const resetRouteDraft = useCallback(() => {
         setActiveRoutePoints([]);
@@ -437,6 +687,10 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     }, [routeSimulationEnabled]);
 
     const saveRoute = useCallback(() => {
+        if (!canRecordRoutes) {
+            return;
+        }
+
         setRouteSubmitError(null);
 
         const startedAt = buildCaughtAtIso(routeForm.data.started_date, routeForm.data.started_time);
@@ -511,9 +765,13 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 },
             },
         );
-    }, [activeRoute, activeRoutePoints, resetRouteDraft, routeDialogMode, routeForm.data.ended_date, routeForm.data.ended_time, routeForm.data.name, routeForm.data.started_date, routeForm.data.started_time, routeForm.data.visibility]);
+    }, [activeRoute, activeRoutePoints, canRecordRoutes, resetRouteDraft, routeDialogMode, routeForm.data.ended_date, routeForm.data.ended_time, routeForm.data.name, routeForm.data.started_date, routeForm.data.started_time, routeForm.data.visibility]);
 
     const deleteRoute = useCallback(() => {
+        if (!canRecordRoutes) {
+            return;
+        }
+
         if (!activeRoute) {
             return;
         }
@@ -529,7 +787,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 setActiveRoute(null);
             },
         });
-    }, [activeRoute]);
+    }, [activeRoute, canRecordRoutes]);
 
     const beginPickAnotherSpot = useCallback(() => {
         if (holdOpenTimer.current) {
@@ -721,10 +979,16 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         onInteractionChange={() => undefined}
                         recenterToCurrentSignal={recenterSignal}
                         onInitialLoadChange={setIsInitialMapLoading}
+                        onBoundsChange={setVisibleBounds}
                         onEditCatch={openEditDialog}
                         onDeleteCatch={openDeleteDialog}
                         onEditRoute={openRouteEditDialog}
                         onDeleteRoute={openRouteDeleteDialog}
+                        onOpenRouteInGoogleMaps={openRouteInGoogleMaps}
+                        onExportVisible={exportVisible}
+                        onExportRouteKml={exportRouteKml}
+                        onExportRouteGpx={exportRouteGpx}
+                        canRecordRoutes={canRecordRoutes}
                     />
 
                     <div
@@ -756,7 +1020,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                     Fishmap
                                 </Link>
                                 <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl">{t('dashboard.live_map')}</h1>
-                                <p className="mt-2 text-sm leading-6 text-slate-600">{t('dashboard.hold_map')}</p>
+                                <p className="mt-2 text-sm leading-6 text-slate-600">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
                             </div>
 
                             <div className="grid grid-cols-3 gap-3">
@@ -765,6 +1029,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                 <StatCard icon={Waves} label={t('dashboard.latest')} value={latestTripLabel} compact />
                             </div>
 
+                            {canRecordRoutes ? (
                             <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
@@ -831,6 +1096,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                     )}
                                 </div>
                             </div>
+                            ) : null}
 
                             {mapPickMode ? (
                                 <StatusBanner type="info" message={t('dashboard.tap_to_choose')} />
@@ -910,22 +1176,24 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                                 <p className="mt-1 text-sm text-slate-600">{t('dashboard.add_a_fish_copy')}</p>
                                             </button>
 
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    if (routeSimulationEnabled) {
-                                                        setRouteSimulationPickMode(true);
-                                                        setDialogOpen(false);
-                                                        return;
-                                                    }
+                                            {canRecordRoutes ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (routeSimulationEnabled) {
+                                                            setRouteSimulationPickMode(true);
+                                                            setDialogOpen(false);
+                                                            return;
+                                                        }
 
-                                                    startRouteRecording();
-                                                }}
-                                                className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-300"
-                                            >
-                                                <p className="font-semibold text-slate-950">{t('dashboard.start_navigation')}</p>
-                                                <p className="mt-1 text-sm text-slate-600">{t('dashboard.start_navigation_copy')}</p>
-                                            </button>
+                                                        startRouteRecording();
+                                                    }}
+                                                    className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-300"
+                                                >
+                                                    <p className="font-semibold text-slate-950">{t('dashboard.start_navigation')}</p>
+                                                    <p className="mt-1 text-sm text-slate-600">{t('dashboard.start_navigation_copy')}</p>
+                                                </button>
+                                            ) : null}
                                         </div>
                                     </>
                                 ) : null}
@@ -1433,4 +1701,13 @@ function buildCaughtAtIso(dateValue: string, timeValue: string) {
     }
 
     return parsed.toISOString();
+}
+
+function escapeXml(value: string) {
+    return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
 }

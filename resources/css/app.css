@@ -185,6 +185,117 @@
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
 }
 
+.fishmap-map .leaflet-popup-content-wrapper {
+    border-radius: 1.4rem;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+    padding: 0;
+}
+
+.fishmap-map .leaflet-popup-content {
+    margin: 0;
+    min-width: 260px;
+}
+
+.fishmap-map .leaflet-popup-tip {
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: none;
+}
+
+.fishmap-map .leaflet-popup-close-button {
+    top: 12px !important;
+    right: 12px !important;
+    color: #64748b !important;
+}
+
+.fishmap-popup-card {
+    display: grid;
+    gap: 1rem;
+    padding: 1rem;
+}
+
+.fishmap-popup-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #020617;
+}
+
+.fishmap-popup-copy {
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: #475569;
+}
+
+.fishmap-popup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.fishmap-popup-button {
+    border-radius: 999px;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1;
+    transition:
+        transform 120ms ease,
+        background-color 120ms ease,
+        color 120ms ease,
+        border-color 120ms ease;
+}
+
+.fishmap-popup-button:hover {
+    transform: translateY(-1px);
+}
+
+.fishmap-popup-button--primary {
+    background: #0f172a;
+    color: white;
+}
+
+.fishmap-popup-button--secondary {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.fishmap-popup-button--outline {
+    border: 1px solid #cbd5e1;
+    background: white;
+    color: #334155;
+}
+
+.fishmap-popup-button--danger {
+    background: #fef2f2;
+    color: #b91c1c;
+}
+
+.dark .fishmap-map .leaflet-popup-content-wrapper {
+    background: rgba(15, 23, 42, 0.96);
+}
+
+.dark .fishmap-map .leaflet-popup-tip {
+    background: rgba(15, 23, 42, 0.96);
+}
+
+.dark .fishmap-map .leaflet-popup-close-button {
+    color: #cbd5e1 !important;
+}
+
+.dark .fishmap-popup-title {
+    color: #f8fafc;
+}
+
+.dark .fishmap-popup-copy {
+    color: #cbd5e1;
+}
+
+.dark .fishmap-popup-button--outline {
+    border-color: #334155;
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
 @media (max-width: 767px) {
     .fishmap-map .leaflet-control-attribution {
         display: none !important;
