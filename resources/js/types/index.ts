@@ -81,6 +81,12 @@ export interface MapBounds {
     west: number;
 }
 
+export interface MapFocusRequest {
+    key: number;
+    center?: [number, number];
+    bounds?: [[number, number], [number, number]];
+}
+
 export interface User {
     id: number;
     name: string;

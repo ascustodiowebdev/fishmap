@@ -1,10 +1,10 @@
 import { useTranslator } from '@/lib/i18n';
-import { type CatchLog, type MapBounds, type NavigationRoute } from '@/types';
+import { type CatchLog, type MapBounds, type MapFocusRequest, type NavigationRoute } from '@/types';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
-import { Download, Fish, Layers3 } from 'lucide-react';
+import { Fish, Layers3 } from 'lucide-react';
 
 interface CatchMapProps {
     catchLogs: CatchLog[];
@@ -18,6 +18,7 @@ interface CatchMapProps {
     onCurrentPositionChange: (position: [number, number] | null) => void;
     onInteractionChange: (isInteracting: boolean) => void;
     recenterToCurrentSignal: number;
+    externalFocusRequest: MapFocusRequest | null;
     onInitialLoadChange: (isLoading: boolean) => void;
     onBoundsChange: (bounds: MapBounds) => void;
     onLongPress: (position: [number, number]) => void;
@@ -25,10 +26,6 @@ interface CatchMapProps {
     onDeleteCatch: (catchLog: CatchLog) => void;
     onEditRoute: (route: NavigationRoute) => void;
     onDeleteRoute: (route: NavigationRoute) => void;
-    onOpenRouteInGoogleMaps: (route: NavigationRoute) => void;
-    onExportVisible: () => void;
-    onExportRouteKml: (route: NavigationRoute) => void;
-    onExportRouteGpx: (route: NavigationRoute) => void;
     canRecordRoutes: boolean;
 }
 
@@ -49,6 +46,7 @@ export function CatchMap({
     onCurrentPositionChange,
     onInteractionChange,
     recenterToCurrentSignal,
+    externalFocusRequest,
     onInitialLoadChange,
     onBoundsChange,
     onLongPress,
@@ -56,10 +54,6 @@ export function CatchMap({
     onDeleteCatch,
     onEditRoute,
     onDeleteRoute,
-    onOpenRouteInGoogleMaps,
-    onExportVisible,
-    onExportRouteKml,
-    onExportRouteGpx,
     canRecordRoutes,
 }: CatchMapProps) {
     const { t } = useTranslator();
@@ -180,7 +174,7 @@ export function CatchMap({
     return (
         <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[#0f172a] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
             <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
-                <MapViewport focusRequest={focusRequest} />
+                <MapViewport focusRequest={externalFocusRequest ?? focusRequest} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
                 <MapBoundsBridge onBoundsChange={onBoundsChange} />
                 <MapClickHandler allowTapSelection={allowTapSelection} onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
@@ -294,15 +288,6 @@ export function CatchMap({
                                 </div>
 
                                 <div className="fishmap-popup-actions">
-                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--secondary" onClick={() => onOpenRouteInGoogleMaps(route)}>
-                                        {t('dashboard.open_in_google_maps')}
-                                    </button>
-                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--outline" onClick={() => onExportRouteKml(route)}>
-                                        {t('dashboard.export_route_kml')}
-                                    </button>
-                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--outline" onClick={() => onExportRouteGpx(route)}>
-                                        {t('dashboard.export_route_gpx')}
-                                    </button>
                                     {route.is_owner && canRecordRoutes ? (
                                         <>
                                             <button
@@ -443,15 +428,6 @@ export function CatchMap({
             <div className="absolute bottom-14 left-3 z-[500] md:bottom-5 md:left-5">
                 <button
                     type="button"
-                    onClick={onExportVisible}
-                    className="mb-2 flex items-center gap-2 rounded-full border border-white/15 bg-slate-900/72 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-white shadow-lg backdrop-blur transition hover:bg-slate-900/85 md:mb-3"
-                >
-                    <Download className="size-4" />
-                    <span className="uppercase">{t('dashboard.export_visible')}</span>
-                </button>
-
-                <button
-                    type="button"
                     onClick={cycleLayer}
                     className="flex items-center gap-2 rounded-full border border-white/15 bg-slate-900/72 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-white shadow-lg backdrop-blur transition md:hidden"
                 >
@@ -522,7 +498,7 @@ function createFishPinIcon(isOwner: boolean): Icon {
     });
 }
 
-function MapViewport({ focusRequest }: { focusRequest: { center: [number, number]; key: number } | null }) {
+function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null }) {
     const map = useMap();
     const previousKey = useRef<number | null>(null);
 
@@ -550,10 +526,21 @@ function MapViewport({ focusRequest }: { focusRequest: { center: [number, number
 
         previousKey.current = focusRequest.key;
 
-        map.flyTo(focusRequest.center, Math.max(map.getZoom(), 14), {
-            animate: true,
-            duration: 0.35,
-        });
+        if (focusRequest.bounds) {
+            map.fitBounds(focusRequest.bounds, {
+                animate: true,
+                duration: 0.35,
+                padding: [36, 36],
+            });
+            return;
+        }
+
+        if (focusRequest.center) {
+            map.flyTo(focusRequest.center, Math.max(map.getZoom(), 14), {
+                animate: true,
+                duration: 0.35,
+            });
+        }
     }, [focusRequest, map]);
 
     return null;

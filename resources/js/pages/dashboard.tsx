@@ -1,8 +1,9 @@
 import { CatchMap } from '@/components/catch-map';
+import AppWordmark from '@/components/app-wordmark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useTranslator } from '@/lib/i18n';
-import { type BreadcrumbItem, type CatchLog, type MapBounds, type NavigationRoute, type SharedData } from '@/types';
+import { type BreadcrumbItem, type CatchLog, type MapFocusRequest, type NavigationRoute, type SharedData } from '@/types';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Waves, X } from 'lucide-react';
@@ -20,6 +21,7 @@ interface DashboardProps {
 
 type CatchFlowStep = 'action' | 'location-mode' | 'confirm-location' | 'details' | 'navigation' | 'delete' | 'success';
 type RouteDialogMode = 'create' | 'edit' | 'delete' | null;
+type LibraryDialogMode = 'spots' | 'routes' | null;
 
 const inputClassName =
     'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-teal-400 dark:focus:ring-teal-900/40';
@@ -59,7 +61,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const [activeRoute, setActiveRoute] = useState<NavigationRoute | null>(null);
     const [routeSubmitError, setRouteSubmitError] = useState<string | null>(null);
     const [mobileHudOpen, setMobileHudOpen] = useState(false);
-    const [visibleBounds, setVisibleBounds] = useState<MapBounds | null>(null);
+    const [mapFocusRequest, setMapFocusRequest] = useState<MapFocusRequest | null>(null);
+    const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
+    const [libraryDialogMode, setLibraryDialogMode] = useState<LibraryDialogMode>(null);
 
     const form = useForm({
         species: '',
@@ -98,41 +102,14 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const displayTrackedPosition = routeSimulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
     const activeRoutePolyline = activeRoutePoints.map((point) => [point.latitude, point.longitude] as [number, number]);
 
-    const isPointVisible = useCallback((latitude: number, longitude: number) => {
-        if (!visibleBounds) {
-            return true;
-        }
-
-        return (
-            latitude <= visibleBounds.north &&
-            latitude >= visibleBounds.south &&
-            longitude <= visibleBounds.east &&
-            longitude >= visibleBounds.west
-        );
-    }, [visibleBounds]);
-
-    const visibleCatchLogs = useMemo(
-        () =>
-            catchLogs.filter((catchLog) => {
-                const latitude = Number(catchLog.latitude);
-                const longitude = Number(catchLog.longitude);
-
-                return Number.isFinite(latitude) && Number.isFinite(longitude) && isPointVisible(latitude, longitude);
-            }),
-        [catchLogs, isPointVisible],
+    const privateFishSpots = useMemo(
+        () => catchLogs.filter((catchLog) => catchLog.is_owner && catchLog.visibility === 'private'),
+        [catchLogs],
     );
 
-    const visibleNavigationRoutes = useMemo(
-        () =>
-            navigationRoutes.filter((navigationRoute) =>
-                navigationRoute.points.some((point) => {
-                    const latitude = Number(point.latitude);
-                    const longitude = Number(point.longitude);
-
-                    return Number.isFinite(latitude) && Number.isFinite(longitude) && isPointVisible(latitude, longitude);
-                }),
-            ),
-        [isPointVisible, navigationRoutes],
+    const publicFishSpots = useMemo(
+        () => catchLogs.filter((catchLog) => catchLog.visibility === 'public'),
+        [catchLogs],
     );
 
     useEffect(() => {
@@ -389,200 +366,49 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         );
     }, [setCoordinates]);
 
-    const openRouteInGoogleMaps = useCallback((navigationRoute: NavigationRoute) => {
+    const focusCatchSpot = useCallback((catchLog: CatchLog) => {
+        const latitude = Number(catchLog.latitude);
+        const longitude = Number(catchLog.longitude);
+
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+            return;
+        }
+
+        setMobileHudOpen(false);
+        setLibraryDialogOpen(false);
+        setMapFocusRequest({
+            key: Date.now(),
+            center: [latitude, longitude],
+        });
+    }, []);
+
+    const focusNavigationRoute = useCallback((navigationRoute: NavigationRoute) => {
         const routePoints = navigationRoute.points
             .map((point) => [Number(point.latitude), Number(point.longitude)] as [number, number])
             .filter(([latitude, longitude]) => Number.isFinite(latitude) && Number.isFinite(longitude));
 
-        if (routePoints.length < 2) {
+        if (routePoints.length === 0) {
             return;
         }
 
-        const origin = routePoints[0];
-        const destination = routePoints[routePoints.length - 1];
-        const maxWaypoints = 3;
-        const waypointIndexes = Array.from({ length: maxWaypoints }, (_, index) =>
-            Math.round(((index + 1) * (routePoints.length - 2)) / (maxWaypoints + 1)),
-        )
-            .filter((index) => index > 0 && index < routePoints.length - 1)
-            .filter((value, index, array) => array.indexOf(value) === index);
+        const latitudes = routePoints.map(([latitude]) => latitude);
+        const longitudes = routePoints.map(([, longitude]) => longitude);
 
-        const waypoints = waypointIndexes.map((index) => routePoints[index]).map(([latitude, longitude]) => `${latitude},${longitude}`);
-
-        const url = new URL('https://www.google.com/maps/dir/');
-        url.searchParams.set('api', '1');
-        url.searchParams.set('origin', `${origin[0]},${origin[1]}`);
-        url.searchParams.set('destination', `${destination[0]},${destination[1]}`);
-        url.searchParams.set('travelmode', 'driving');
-
-        if (waypoints.length > 0) {
-            url.searchParams.set('waypoints', waypoints.join('|'));
-        }
-
-        window.open(url.toString(), '_blank', 'noopener,noreferrer');
+        setMobileHudOpen(false);
+        setLibraryDialogOpen(false);
+        setMapFocusRequest({
+            key: Date.now(),
+            bounds: [
+                [Math.min(...latitudes), Math.min(...longitudes)],
+                [Math.max(...latitudes), Math.max(...longitudes)],
+            ],
+        });
     }, []);
 
-    const buildRouteKml = useCallback((navigationRoute: NavigationRoute) => {
-        return `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>${escapeXml(navigationRoute.name)}</name>
-    <Placemark>
-      <name>${escapeXml(navigationRoute.name)}</name>
-      <description>${escapeXml(`${navigationRoute.owner_name ?? 'Fishmap'} • ${navigationRoute.visibility}`)}</description>
-      <LineString>
-        <tessellate>1</tessellate>
-        <coordinates>
-          ${navigationRoute.points.map((point) => `${point.longitude},${point.latitude},0`).join(' ')}
-        </coordinates>
-      </LineString>
-    </Placemark>
-  </Document>
-</kml>`;
+    const openLibraryDialog = useCallback((mode: LibraryDialogMode) => {
+        setLibraryDialogMode(mode);
+        setLibraryDialogOpen(true);
     }, []);
-
-    const buildRouteGpx = useCallback((navigationRoute: NavigationRoute) => {
-        return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Fishmap" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk>
-    <name>${escapeXml(navigationRoute.name)}</name>
-    <trkseg>
-      ${navigationRoute.points
-          .map(
-              (point) => `
-      <trkpt lat="${point.latitude}" lon="${point.longitude}">
-        ${point.recorded_at ? `<time>${point.recorded_at}</time>` : ''}
-      </trkpt>`,
-          )
-          .join('')}
-    </trkseg>
-  </trk>
-</gpx>`;
-    }, []);
-
-    const downloadTextFile = useCallback((filename: string, content: string, mimeType: string) => {
-        const blob = new Blob([content], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = filename;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        URL.revokeObjectURL(url);
-    }, []);
-
-    const exportRouteKml = useCallback((navigationRoute: NavigationRoute) => {
-        const safeName = navigationRoute.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '') || 'route';
-        downloadTextFile(`${safeName}.kml`, buildRouteKml(navigationRoute), 'application/vnd.google-earth.kml+xml;charset=utf-8');
-    }, [buildRouteKml, downloadTextFile]);
-
-    const exportRouteGpx = useCallback((navigationRoute: NavigationRoute) => {
-        const safeName = navigationRoute.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '') || 'route';
-        downloadTextFile(`${safeName}.gpx`, buildRouteGpx(navigationRoute), 'application/gpx+xml;charset=utf-8');
-    }, [buildRouteGpx, downloadTextFile]);
-
-    const buildVisibleKml = useCallback(() => {
-        const placemarks = visibleCatchLogs
-            .map(
-                (catchLog) => `
-        <Placemark>
-            <name>${escapeXml(catchLog.species)}</name>
-            <description>${escapeXml(
-                `${catchLog.owner_name ?? 'Fishmap'} • ${catchLog.visibility} • ${catchLog.caught_at ?? ''}`,
-            )}</description>
-            <Point><coordinates>${catchLog.longitude},${catchLog.latitude},0</coordinates></Point>
-        </Placemark>`,
-            )
-            .join('');
-
-        const routes = visibleNavigationRoutes
-            .map(
-                (navigationRoute) => `
-        <Placemark>
-            <name>${escapeXml(navigationRoute.name)}</name>
-            <description>${escapeXml(`${navigationRoute.owner_name ?? 'Fishmap'} • ${navigationRoute.visibility}`)}</description>
-            <LineString>
-                <tessellate>1</tessellate>
-                <coordinates>
-                    ${navigationRoute.points.map((point) => `${point.longitude},${point.latitude},0`).join(' ')}
-                </coordinates>
-            </LineString>
-        </Placemark>`,
-            )
-            .join('');
-
-        return `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>Fishmap visible export</name>
-    ${placemarks}
-    ${routes}
-  </Document>
-</kml>`;
-    }, [visibleCatchLogs, visibleNavigationRoutes]);
-
-    const buildVisibleGpx = useCallback(() => {
-        const waypoints = visibleCatchLogs
-            .map(
-                (catchLog) => `
-  <wpt lat="${catchLog.latitude}" lon="${catchLog.longitude}">
-    <name>${escapeXml(catchLog.species)}</name>
-    <desc>${escapeXml(`${catchLog.owner_name ?? 'Fishmap'} • ${catchLog.visibility}`)}</desc>
-  </wpt>`,
-            )
-            .join('');
-
-        const tracks = visibleNavigationRoutes
-            .map(
-                (navigationRoute) => `
-  <trk>
-    <name>${escapeXml(navigationRoute.name)}</name>
-    <trkseg>
-      ${navigationRoute.points
-          .map(
-              (point) => `
-      <trkpt lat="${point.latitude}" lon="${point.longitude}">
-        ${point.recorded_at ? `<time>${point.recorded_at}</time>` : ''}
-      </trkpt>`,
-          )
-          .join('')}
-    </trkseg>
-  </trk>`,
-            )
-            .join('');
-
-        return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Fishmap" xmlns="http://www.topografix.com/GPX/1/1">
-${waypoints}
-${tracks}
-</gpx>`;
-    }, [visibleCatchLogs, visibleNavigationRoutes]);
-
-    const exportVisible = useCallback(() => {
-        if (visibleCatchLogs.length === 0 && visibleNavigationRoutes.length === 0) {
-            return;
-        }
-
-        const choice = window.prompt('Export format: type KML or GPX', 'KML');
-        if (!choice) {
-            return;
-        }
-
-        const format = choice.trim().toLowerCase();
-        const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-
-        if (format === 'gpx') {
-            downloadTextFile(`fishmap-visible-${timestamp}.gpx`, buildVisibleGpx(), 'application/gpx+xml;charset=utf-8');
-            return;
-        }
-
-        downloadTextFile(
-            `fishmap-visible-${timestamp}.kml`,
-            buildVisibleKml(),
-            'application/vnd.google-earth.kml+xml;charset=utf-8',
-        );
-    }, [buildVisibleGpx, buildVisibleKml, downloadTextFile, visibleCatchLogs.length, visibleNavigationRoutes.length]);
 
     const startRouteRecording = useCallback(
         (forcedStartPosition?: [number, number] | null) => {
@@ -923,6 +749,8 @@ ${tracks}
     };
 
     const latestTripLabel = stats.latest_trip ? new Date(stats.latest_trip).toLocaleDateString() : t('dashboard.no_trips');
+    const fishSpotCount = catchLogs.length.toString();
+    const routeCount = navigationRoutes.length.toString();
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -978,16 +806,13 @@ ${tracks}
                         }}
                         onInteractionChange={() => undefined}
                         recenterToCurrentSignal={recenterSignal}
+                        externalFocusRequest={mapFocusRequest}
                         onInitialLoadChange={setIsInitialMapLoading}
-                        onBoundsChange={setVisibleBounds}
+                        onBoundsChange={() => undefined}
                         onEditCatch={openEditDialog}
                         onDeleteCatch={openDeleteDialog}
                         onEditRoute={openRouteEditDialog}
                         onDeleteRoute={openRouteDeleteDialog}
-                        onOpenRouteInGoogleMaps={openRouteInGoogleMaps}
-                        onExportVisible={exportVisible}
-                        onExportRouteKml={exportRouteKml}
-                        onExportRouteGpx={exportRouteGpx}
                         canRecordRoutes={canRecordRoutes}
                     />
 
@@ -1009,23 +834,23 @@ ${tracks}
                         <div className={`${mobileHudOpen ? 'flex' : 'hidden'} pointer-events-auto flex-col gap-3 md:flex`}>
                             <div className="rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
                                 <div className="hidden items-center justify-between gap-3 md:flex">
-                                    <Link href={route('home')} className="text-xs font-semibold tracking-[0.22em] text-teal-800 uppercase">
-                                        Fishmap
+                                    <Link href={route('home')}>
+                                        <AppWordmark className="h-7 w-[155px] sm:h-9 sm:w-[190px]" />
                                     </Link>
                                     <Link href={route('home')} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950">
                                         {t('app.home')}
                                     </Link>
                                 </div>
-                                <Link href={route('home')} className="text-xs font-semibold tracking-[0.22em] text-teal-800 uppercase md:hidden">
-                                    Fishmap
+                                <Link href={route('home')} className="md:hidden">
+                                    <AppWordmark className="h-7 w-[155px] sm:h-9 sm:w-[190px]" />
                                 </Link>
                                 <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl">{t('dashboard.live_map')}</h1>
                                 <p className="mt-2 text-sm leading-6 text-slate-600">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
                             </div>
 
                             <div className="grid grid-cols-3 gap-3">
-                                <StatCard icon={Fish} label={t('dashboard.total_catches')} value={stats.total_catches.toString()} />
-                                <StatCard icon={Globe} label={t('dashboard.public')} value={stats.public_spots.toString()} />
+                                <StatCard icon={Fish} label={t('dashboard.fish_spots')} value={fishSpotCount} onClick={() => openLibraryDialog('spots')} />
+                                <StatCard icon={Globe} label={t('dashboard.routes')} value={routeCount} onClick={() => openLibraryDialog('routes')} />
                                 <StatCard icon={Waves} label={t('dashboard.latest')} value={latestTripLabel} compact />
                             </div>
 
@@ -1105,6 +930,112 @@ ${tracks}
                             ) : null}
                         </div>
                     </div>
+
+                    <Dialog
+                        open={libraryDialogOpen}
+                        onOpenChange={(open) => {
+                            setLibraryDialogOpen(open);
+                            if (!open) {
+                                setLibraryDialogMode(null);
+                            }
+                        }}
+                    >
+                        <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-2xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
+                            <div className="relative flex max-h-[92dvh] min-h-0 flex-col overflow-hidden p-5 sm:max-h-[85vh] sm:p-6">
+                                <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
+                                <DialogHeader>
+                                    <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                        {libraryDialogMode === 'routes' ? t('dashboard.routes') : t('dashboard.fish_spots')}
+                                    </DialogTitle>
+                                    <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                        {libraryDialogMode === 'routes' ? t('dashboard.routes_modal_copy') : t('dashboard.fish_spots_modal_copy')}
+                                    </DialogDescription>
+                                </DialogHeader>
+
+                                {libraryDialogMode === 'spots' ? (
+                                    <div className="mt-6 grid gap-5 overflow-y-auto pr-1">
+                                        <div className="grid gap-3">
+                                            <h3 className="text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">
+                                                {t('dashboard.private_fish_spots')}
+                                            </h3>
+                                            {privateFishSpots.length > 0 ? (
+                                                privateFishSpots.map((catchLog) => (
+                                                    <button
+                                                        key={`private-spot-${catchLog.id}`}
+                                                        type="button"
+                                                        onClick={() => focusCatchSpot(catchLog)}
+                                                        className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
+                                                    >
+                                                        <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
+                                                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                                            {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
+                                                        </p>
+                                                    </button>
+                                                ))
+                                            ) : (
+                                                <p className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.no_private_fish_spots')}</p>
+                                            )}
+                                        </div>
+
+                                        <div className="grid gap-3">
+                                            <h3 className="text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">
+                                                {t('dashboard.public_fish_spots')}
+                                            </h3>
+                                            {publicFishSpots.length > 0 ? (
+                                                publicFishSpots.map((catchLog) => (
+                                                    <button
+                                                        key={`public-spot-${catchLog.id}`}
+                                                        type="button"
+                                                        onClick={() => focusCatchSpot(catchLog)}
+                                                        className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
+                                                    >
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
+                                                            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                                                                {catchLog.is_owner ? t('dashboard.yours') : catchLog.owner_name ?? 'Fishmap'}
+                                                            </span>
+                                                        </div>
+                                                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                                            {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
+                                                        </p>
+                                                    </button>
+                                                ))
+                                            ) : (
+                                                <p className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.no_public_fish_spots')}</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : null}
+
+                                {libraryDialogMode === 'routes' ? (
+                                    <div className="mt-6 grid gap-3 overflow-y-auto pr-1">
+                                        {navigationRoutes.length > 0 ? (
+                                            navigationRoutes.map((navigationRoute) => (
+                                                <button
+                                                    key={`route-library-${navigationRoute.id}`}
+                                                    type="button"
+                                                    onClick={() => focusNavigationRoute(navigationRoute)}
+                                                    className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
+                                                >
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <p className="font-semibold text-slate-950 dark:text-slate-50">{navigationRoute.name}</p>
+                                                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                                                            {navigationRoute.is_owner ? t('dashboard.yours') : navigationRoute.owner_name ?? 'Fishmap'}
+                                                        </span>
+                                                    </div>
+                                                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                                        {t('dashboard.route_points', { count: navigationRoute.point_count })}
+                                                    </p>
+                                                </button>
+                                            ))
+                                        ) : (
+                                            <p className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.no_routes_available')}</p>
+                                        )}
+                                    </div>
+                                ) : null}
+                            </div>
+                        </DialogContent>
+                    </Dialog>
 
                     <div className="absolute right-3 bottom-14 z-[500] flex flex-col items-end gap-2 md:right-5 md:bottom-5 md:gap-3">
                         <Button
@@ -1639,18 +1570,24 @@ function StatCard({
     label,
     value,
     compact = false,
+    onClick,
 }: {
     icon: typeof Fish;
     label: string;
     value: string;
     compact?: boolean;
+    onClick?: () => void;
 }) {
     return (
-        <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+        <button
+            type="button"
+            onClick={onClick}
+            className={`rounded-[1.35rem] border border-white/70 bg-white/88 p-4 text-left shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur ${onClick ? 'transition hover:-translate-y-0.5 hover:border-teal-200' : ''}`}
+        >
             <Icon className="size-4 text-teal-700" />
             <p className={`mt-3 font-semibold text-slate-950 ${compact ? 'text-sm' : 'text-2xl'}`}>{value}</p>
             <p className="mt-1 text-xs text-slate-500 uppercase tracking-[0.18em]">{label}</p>
-        </div>
+        </button>
     );
 }
 
@@ -1701,13 +1638,4 @@ function buildCaughtAtIso(dateValue: string, timeValue: string) {
     }
 
     return parsed.toISOString();
-}
-
-function escapeXml(value: string) {
-    return value
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&apos;');
 }
