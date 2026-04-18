@@ -96,7 +96,7 @@ class CatchLogController extends Controller
         $request->user()->catchLogs()->create($validated);
 
         return redirect()
-            ->route('dashboard')
+            ->route('map')
             ->with('success', __('messages.catch_saved'));
     }
 
@@ -109,7 +109,7 @@ class CatchLogController extends Controller
         $catchLog->update($validated);
 
         return redirect()
-            ->route('dashboard')
+            ->route('map')
             ->with('success', __('messages.catch_updated'));
     }
 
@@ -120,7 +120,7 @@ class CatchLogController extends Controller
         $catchLog->delete();
 
         return redirect()
-            ->route('dashboard')
+            ->route('map')
             ->with('success', __('messages.catch_deleted'));
     }
 

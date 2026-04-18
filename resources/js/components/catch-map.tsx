@@ -1,6 +1,6 @@
 import { useTranslator } from '@/lib/i18n';
 import { type CatchLog, type NavigationRoute } from '@/types';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
@@ -554,7 +554,7 @@ function MapClickHandler({
     const pressStart = useRef<{ position: [number, number]; pointX: number; pointY: number; moved: boolean; pointerType: 'mouse' | 'touch' | 'pen' } | null>(null);
     const longPressTriggered = useRef(false);
 
-    const beginHold = (position: [number, number], pointX: number, pointY: number, pointerType: 'mouse' | 'touch' | 'pen') => {
+    const beginHold = useCallback((position: [number, number], pointX: number, pointY: number, pointerType: 'mouse' | 'touch' | 'pen') => {
         if (holdTimer.current) {
             clearTimeout(holdTimer.current);
         }
@@ -576,16 +576,16 @@ function MapClickHandler({
             longPressTriggered.current = true;
             onLongPress(pressStart.current.position);
         }, 1000);
-    };
+    }, [onLongPress]);
 
-    const cancelHold = () => {
+    const cancelHold = useCallback(() => {
         if (holdTimer.current) {
             clearTimeout(holdTimer.current);
             holdTimer.current = null;
         }
 
         pressStart.current = null;
-    };
+    }, []);
 
     useEffect(() => {
         const container = map.getContainer();
@@ -699,7 +699,7 @@ function MapClickHandler({
             container.removeEventListener('touchcancel', onEnd);
             container.removeEventListener('contextmenu', onContextMenu);
         };
-    }, [map, onLongPress]);
+    }, [beginHold, cancelHold, map, onLongPress]);
 
     useMapEvents({
         mouseup() {
@@ -763,7 +763,7 @@ function MapClickHandler({
         },
     });
 
-    useEffect(() => cancelHold, []);
+    useEffect(() => cancelHold, [cancelHold]);
 
     return null;
 }

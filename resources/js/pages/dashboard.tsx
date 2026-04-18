@@ -30,7 +30,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const breadcrumbs: BreadcrumbItem[] = [
         {
             title: 'Fishmap',
-            href: '/dashboard',
+            href: '/map',
         },
     ];
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -328,7 +328,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         setDialogOpen(true);
     }, []);
 
-    const useCurrentPositionForCatch = useCallback(() => {
+    const fetchCurrentPositionForCatch = useCallback(() => {
         if (!('geolocation' in navigator)) {
             return;
         }
@@ -632,7 +632,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         }
 
         form.post(route('catch-logs.store'), requestOptions);
-    }, [activeCatch, form, resetDialogState, selectedPosition]);
+    }, [activeCatch, form, resetDialogState, selectedPosition, t]);
 
     const deleteFish = useCallback(() => {
         if (!activeCatch) {
@@ -657,7 +657,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 }, 1400);
             },
         });
-    }, [activeCatch, resetDialogState]);
+    }, [activeCatch, resetDialogState, t]);
 
     const submit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -673,8 +673,8 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 <link href="https://fonts.bunny.net/css?family=manrope:400,500,600,700" rel="stylesheet" />
             </Head>
 
-            <div className="flex h-[calc(100vh-5rem)] flex-col p-3 md:p-4">
-                <section className="relative min-h-0 flex-1 overflow-hidden rounded-[2rem]">
+            <div className="flex min-h-[calc(100svh-4rem)] flex-col p-0 md:h-[calc(100vh-5rem)] md:p-4">
+                <section className="relative min-h-0 flex-1 overflow-hidden rounded-none bg-[#081217] md:rounded-[2rem]">
                     <CatchMap
                         catchLogs={catchLogs}
                         navigationRoutes={navigationRoutes}
@@ -850,7 +850,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                 if (displayTrackedPosition) {
                                     setRecenterSignal(Date.now());
                                 } else {
-                                    useCurrentPositionForCatch();
+                                    fetchCurrentPositionForCatch();
                                 }
                             }}
                         >
