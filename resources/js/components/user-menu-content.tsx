@@ -4,7 +4,7 @@ import { useMobileNavigation } from '@/hooks/use-mobile-navigation';
 import { useTranslator } from '@/lib/i18n';
 import { type User } from '@/types';
 import { Link } from '@inertiajs/react';
-import { LogOut, Settings } from 'lucide-react';
+import { LogOut, Settings, Shield } from 'lucide-react';
 
 interface UserMenuContentProps {
     user: User;
@@ -23,6 +23,14 @@ export function UserMenuContent({ user }: UserMenuContentProps) {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
+                {user.is_admin && (
+                    <DropdownMenuItem asChild>
+                        <Link className="block w-full" href={route('admin.index')} as="button" prefetch onClick={cleanup}>
+                            <Shield className="mr-2" />
+                            {t('app.admin')}
+                        </Link>
+                    </DropdownMenuItem>
+                )}
                 <DropdownMenuItem asChild>
                     <Link className="block w-full" href={route('profile.edit')} as="button" prefetch onClick={cleanup}>
                         <Settings className="mr-2" />

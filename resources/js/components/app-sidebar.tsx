@@ -3,15 +3,16 @@ import { NavMain } from '@/components/nav-main';
 import { NavUser } from '@/components/nav-user';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { useTranslator } from '@/lib/i18n';
-import { type NavItem } from '@/types';
-import { Link } from '@inertiajs/react';
-import { Home, MapPinned } from 'lucide-react';
+import { type NavItem, type SharedData } from '@/types';
+import { usePage } from '@inertiajs/react';
+import { Home, MapPinned, Shield } from 'lucide-react';
 import AppLogo from './app-logo';
 
 const footerNavItems: NavItem[] = [];
 
 export function AppSidebar() {
     const { t } = useTranslator();
+    const { auth } = usePage<SharedData>().props;
     const mainNavItems: NavItem[] = [
         {
             title: 'Home',
@@ -20,9 +21,18 @@ export function AppSidebar() {
         },
         {
             title: t('app.catches'),
-            url: '/dashboard',
+            url: '/map',
             icon: MapPinned,
         },
+        ...(auth.user?.is_admin
+            ? [
+                  {
+                      title: t('app.admin'),
+                      url: '/admin',
+                      icon: Shield,
+                  } satisfies NavItem,
+              ]
+            : []),
     ];
 
     return (

@@ -98,7 +98,7 @@ export default function Welcome() {
 
                                 <div className="mt-8 flex flex-col items-center gap-3 sm:items-start sm:flex-row">
                                     <Link
-                                        href={auth.user ? route('dashboard') : route('register')}
+                                        href={auth.user ? route('map') : route('register')}
                                         className="rounded-full bg-teal-800 px-5 py-3 text-center text-sm font-semibold text-white transition hover:bg-teal-700"
                                     >
                                         {auth.user ? t('welcome.go') : t('welcome.start')}

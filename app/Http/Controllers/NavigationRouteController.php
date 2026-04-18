@@ -39,7 +39,7 @@ class NavigationRouteController extends Controller
         );
 
         return redirect()
-            ->route('dashboard')
+            ->route('map')
             ->with('success', __('messages.route_saved'));
     }
 
@@ -57,7 +57,7 @@ class NavigationRouteController extends Controller
         ]);
 
         return redirect()
-            ->route('dashboard')
+            ->route('map')
             ->with('success', __('messages.route_updated'));
     }
 
@@ -68,7 +68,7 @@ class NavigationRouteController extends Controller
         $navigationRoute->delete();
 
         return redirect()
-            ->route('dashboard')
+            ->route('map')
             ->with('success', __('messages.route_deleted'));
     }
 
