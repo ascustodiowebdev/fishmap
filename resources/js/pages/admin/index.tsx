@@ -37,6 +37,7 @@ interface AdminNavigationRoute extends NavigationRoute {
 
 interface AdminPageProps extends SharedData {
     maintenanceMode: boolean;
+    registrationsOpen: boolean;
     users: AdminUser[];
     catchLogs: AdminCatchLog[];
     navigationRoutes: AdminNavigationRoute[];
@@ -84,7 +85,7 @@ function StatCard({
 
 export default function AdminIndex() {
     const { props } = usePage<AdminPageProps>();
-    const { maintenanceMode, users, catchLogs, navigationRoutes, stats, flash } = props;
+    const { maintenanceMode, registrationsOpen, users, catchLogs, navigationRoutes, stats, flash } = props;
 
     const breadcrumbs: BreadcrumbItem[] = [
         {
@@ -96,6 +97,14 @@ export default function AdminIndex() {
     const toggleMaintenance = () => {
         router.patch(route('admin.maintenance.update'), {
             enabled: !maintenanceMode,
+        }, {
+            preserveScroll: true,
+        });
+    };
+
+    const toggleRegistrations = () => {
+        router.patch(route('admin.registrations.update'), {
+            enabled: !registrationsOpen,
         }, {
             preserveScroll: true,
         });
@@ -167,25 +176,47 @@ export default function AdminIndex() {
                     <StatCard title="Routes" value={stats.routes} icon={Route} copy="Review saved navigation routes and points." />
                 </div>
 
-                <Card className="border-slate-200/70 dark:border-slate-800">
-                    <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                            <CardTitle className="flex items-center gap-2 text-xl">
-                                <Wrench className="h-5 w-5" />
-                                Maintenance mode
-                            </CardTitle>
-                            <CardDescription>When enabled, only your admin account can access app pages like the map and settings.</CardDescription>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <Badge variant={maintenanceMode ? 'destructive' : 'secondary'}>
-                                {maintenanceMode ? 'Enabled' : 'Disabled'}
-                            </Badge>
-                            <Button onClick={toggleMaintenance}>
-                                {maintenanceMode ? 'Turn off maintenance' : 'Turn on maintenance'}
-                            </Button>
-                        </div>
-                    </CardHeader>
-                </Card>
+                <div className="grid gap-4 xl:grid-cols-2">
+                    <Card className="border-slate-200/70 dark:border-slate-800">
+                        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <CardTitle className="flex items-center gap-2 text-xl">
+                                    <Wrench className="h-5 w-5" />
+                                    Maintenance mode
+                                </CardTitle>
+                                <CardDescription>When enabled, only your admin account can access app pages like the map and settings.</CardDescription>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <Badge variant={maintenanceMode ? 'destructive' : 'secondary'}>
+                                    {maintenanceMode ? 'Enabled' : 'Disabled'}
+                                </Badge>
+                                <Button onClick={toggleMaintenance}>
+                                    {maintenanceMode ? 'Turn off maintenance' : 'Turn on maintenance'}
+                                </Button>
+                            </div>
+                        </CardHeader>
+                    </Card>
+
+                    <Card className="border-slate-200/70 dark:border-slate-800">
+                        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <CardTitle className="flex items-center gap-2 text-xl">
+                                    <Users className="h-5 w-5" />
+                                    New registrations
+                                </CardTitle>
+                                <CardDescription>Control whether new users can create accounts while you test the live site with a smaller group.</CardDescription>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <Badge variant={registrationsOpen ? 'default' : 'secondary'}>
+                                    {registrationsOpen ? 'Open' : 'Closed'}
+                                </Badge>
+                                <Button onClick={toggleRegistrations} variant={registrationsOpen ? 'destructive' : 'default'}>
+                                    {registrationsOpen ? 'Close registrations' : 'Open registrations'}
+                                </Button>
+                            </div>
+                        </CardHeader>
+                    </Card>
+                </div>
 
                 <Card className="border-slate-200/70 dark:border-slate-800">
                     <CardHeader>

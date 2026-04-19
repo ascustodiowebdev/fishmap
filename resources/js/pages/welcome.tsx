@@ -7,7 +7,7 @@ import { Compass, Fish, Route } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 export default function Welcome() {
-    const { auth, name } = usePage<SharedData>().props;
+    const { auth, name, appState } = usePage<SharedData>().props;
     const { t } = useTranslator();
     const [showMobileFeatures, setShowMobileFeatures] = useState(false);
     const features = [
@@ -65,12 +65,14 @@ export default function Welcome() {
                                     <Link href={route('login')} className="text-sm font-medium text-slate-700 transition hover:text-slate-950">
                                         {t('welcome.login')}
                                     </Link>
-                                    <Link
-                                        href={route('register')}
-                                        className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-950 transition hover:border-slate-400"
-                                    >
-                                        {t('welcome.create_account')}
-                                    </Link>
+                                    {appState.registrations_open ? (
+                                        <Link
+                                            href={route('register')}
+                                            className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-950 transition hover:border-slate-400"
+                                        >
+                                            {t('welcome.create_account')}
+                                        </Link>
+                                    ) : null}
                                 </>
                             ) : (
                                 <Link
@@ -99,10 +101,10 @@ export default function Welcome() {
 
                                 <div className="mt-8 flex flex-col items-center gap-3 sm:items-start sm:flex-row">
                                     <Link
-                                        href={auth.user ? route('map') : route('register')}
+                                        href={auth.user ? route('map') : appState.registrations_open ? route('register') : route('login')}
                                         className="rounded-full bg-teal-800 px-5 py-3 text-center text-sm font-semibold text-white transition hover:bg-teal-700"
                                     >
-                                        {auth.user ? t('welcome.go') : t('welcome.start')}
+                                        {auth.user ? t('welcome.go') : appState.registrations_open ? t('welcome.start') : t('welcome.login')}
                                     </Link>
                                     <a
                                         href="#features"

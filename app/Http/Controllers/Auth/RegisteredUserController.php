@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\AppSetting;
 use App\Models\User;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
@@ -20,6 +21,10 @@ class RegisteredUserController extends Controller
      */
     public function create(): Response
     {
+        if (! AppSetting::getBoolean('registrations_open', true)) {
+            abort(404);
+        }
+
         return Inertia::render('auth/register');
     }
 
@@ -30,6 +35,10 @@ class RegisteredUserController extends Controller
      */
     public function store(Request $request): RedirectResponse
     {
+        if (! AppSetting::getBoolean('registrations_open', true)) {
+            return to_route('home')->with('error', 'New registrations are currently disabled.');
+        }
+
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|lowercase|email|max:255|unique:'.User::class,

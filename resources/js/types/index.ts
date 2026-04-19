@@ -32,6 +32,7 @@ export interface SharedData {
     auth: Auth;
     appState: {
         maintenance_mode: boolean;
+        registrations_open: boolean;
     };
     locale: 'en' | 'pt';
     flash: Flash;

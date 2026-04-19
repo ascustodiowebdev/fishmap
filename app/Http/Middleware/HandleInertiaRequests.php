@@ -48,6 +48,7 @@ class HandleInertiaRequests extends Middleware
             ],
             'appState' => [
                 'maintenance_mode' => AppSetting::getBoolean('maintenance_mode'),
+                'registrations_open' => AppSetting::getBoolean('registrations_open', true),
             ],
             'locale' => app()->getLocale(),
             'flash' => [

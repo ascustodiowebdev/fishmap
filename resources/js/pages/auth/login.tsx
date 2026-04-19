@@ -1,4 +1,4 @@
-import { Head, useForm } from '@inertiajs/react';
+import { Head, useForm, usePage } from '@inertiajs/react';
 import { LoaderCircle } from 'lucide-react';
 import { FormEventHandler } from 'react';
 
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import AuthLayout from '@/layouts/auth-layout';
 import { useTranslator } from '@/lib/i18n';
+import { type SharedData } from '@/types';
 
 interface LoginForm {
     email: string;
@@ -24,6 +25,7 @@ interface LoginProps {
 
 export default function Login({ status, canResetPassword }: LoginProps) {
     const { t } = useTranslator();
+    const { appState } = usePage<SharedData>().props;
     const { data, setData, post, processing, errors, reset } = useForm<LoginForm>({
         email: '',
         password: '',
@@ -92,12 +94,14 @@ export default function Login({ status, canResetPassword }: LoginProps) {
                     </Button>
                 </div>
 
-                <div className="text-muted-foreground text-center text-sm">
-                    {t('auth.no_account')}{' '}
-                    <TextLink href={route('register')} tabIndex={5}>
-                        {t('auth.sign_up')}
-                    </TextLink>
-                </div>
+                {appState.registrations_open ? (
+                    <div className="text-muted-foreground text-center text-sm">
+                        {t('auth.no_account')}{' '}
+                        <TextLink href={route('register')} tabIndex={5}>
+                            {t('auth.sign_up')}
+                        </TextLink>
+                    </div>
+                ) : null}
             </form>
 
             {status && <div className="mb-4 text-center text-sm font-medium text-green-600">{status}</div>}
