@@ -1,4 +1,5 @@
 import { LanguageToggle } from '@/components/language-toggle';
+import AppWordmark from '@/components/app-wordmark';
 import { useTranslator } from '@/lib/i18n';
 import { type SharedData } from '@/types';
 import { Head, Link, usePage } from '@inertiajs/react';
@@ -53,7 +54,7 @@ export default function Welcome() {
                 <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
                     <header className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-center sm:justify-between">
                         <div className="max-w-xs sm:max-w-sm">
-                            <p className="text-sm font-semibold tracking-[0.24em] text-teal-800 uppercase">Fishmap</p>
+                            <AppWordmark className="h-11 w-[190px] sm:h-13 sm:w-[230px]" />
                             <p className="mt-1 text-sm text-slate-600">{t('welcome.tagline')}</p>
                         </div>
 

@@ -1,5 +1,5 @@
 import { LanguageToggle } from '@/components/language-toggle';
-import AppLogoIcon from '@/components/app-logo-icon';
+import AppWordmark from '@/components/app-wordmark';
 import { Link } from '@inertiajs/react';
 
 interface AuthLayoutProps {
@@ -19,8 +19,8 @@ export default function AuthSimpleLayout({ children, title, description }: AuthL
                     </div>
                     <div className="flex flex-col items-center gap-4">
                         <Link href={route('home')} className="flex flex-col items-center gap-2 font-medium">
-                            <div className="mb-1 flex h-9 w-9 items-center justify-center rounded-md">
-                                <AppLogoIcon className="size-9 fill-current text-[var(--foreground)] dark:text-white" />
+                            <div className="mb-1 flex items-center justify-center rounded-md">
+                                <AppWordmark className="h-10 w-auto max-w-[220px] object-contain" />
                             </div>
                             <span className="sr-only">{title}</span>
                         </Link>
