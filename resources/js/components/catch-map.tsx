@@ -16,6 +16,7 @@ interface CatchMapProps {
     onSelectPosition: (position: [number, number]) => void;
     onClearSelection: () => void;
     onCurrentPositionChange: (position: [number, number] | null) => void;
+    onCurrentSpeedChange: (speedKmh: number | null) => void;
     onInteractionChange: (isInteracting: boolean) => void;
     recenterToCurrentSignal: number;
     externalFocusRequest: MapFocusRequest | null;
@@ -26,7 +27,11 @@ interface CatchMapProps {
     onDeleteCatch: (catchLog: CatchLog) => void;
     onEditRoute: (route: NavigationRoute) => void;
     onDeleteRoute: (route: NavigationRoute) => void;
+    onStartRouteGuidance: (route: NavigationRoute) => void;
     canRecordRoutes: boolean;
+    activeGuidanceRouteId: number | null;
+    guidanceNearestPoint: [number, number] | null;
+    isGuidanceActive: boolean;
 }
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
@@ -44,6 +49,7 @@ export function CatchMap({
     onSelectPosition,
     onClearSelection,
     onCurrentPositionChange,
+    onCurrentSpeedChange,
     onInteractionChange,
     recenterToCurrentSignal,
     externalFocusRequest,
@@ -54,7 +60,11 @@ export function CatchMap({
     onDeleteCatch,
     onEditRoute,
     onDeleteRoute,
+    onStartRouteGuidance,
     canRecordRoutes,
+    activeGuidanceRouteId,
+    guidanceNearestPoint,
+    isGuidanceActive,
 }: CatchMapProps) {
     const { t } = useTranslator();
     const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(null);
@@ -78,11 +88,13 @@ export function CatchMap({
     useEffect(() => {
         if (!('geolocation' in navigator)) {
             onCurrentPositionChange(null);
+            onCurrentSpeedChange(null);
             return;
         }
 
         if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
             onCurrentPositionChange(null);
+            onCurrentSpeedChange(null);
             return;
         }
 
@@ -93,6 +105,7 @@ export function CatchMap({
                     setCurrentPosition(nextPosition);
                     setLocationAccuracy(Math.round(coords.accuracy));
                     onCurrentPositionChange(nextPosition);
+                    onCurrentSpeedChange(typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? Math.max(coords.speed * 3.6, 0) : null);
 
                     if (!hasAutoCenteredRef.current) {
                         hasAutoCenteredRef.current = true;
@@ -105,19 +118,46 @@ export function CatchMap({
                 () => undefined,
                 {
                     enableHighAccuracy: true,
-                    maximumAge: 5000,
-                    timeout: 10000,
+                    maximumAge: isGuidanceActive ? 1000 : 5000,
+                    timeout: isGuidanceActive ? 5000 : 10000,
                 },
             );
         };
 
         requestPosition();
-        const intervalId = window.setInterval(requestPosition, 10000);
+
+        let intervalId: number | null = null;
+        let watchId: number | null = null;
+
+        if (isGuidanceActive) {
+            watchId = navigator.geolocation.watchPosition(
+                ({ coords }) => {
+                    const nextPosition: [number, number] = [coords.latitude, coords.longitude];
+                    setCurrentPosition(nextPosition);
+                    setLocationAccuracy(Math.round(coords.accuracy));
+                    onCurrentPositionChange(nextPosition);
+                    onCurrentSpeedChange(typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? Math.max(coords.speed * 3.6, 0) : null);
+                },
+                () => undefined,
+                {
+                    enableHighAccuracy: true,
+                    maximumAge: 1000,
+                    timeout: 5000,
+                },
+            );
+        } else {
+            intervalId = window.setInterval(requestPosition, 10000);
+        }
 
         return () => {
-            window.clearInterval(intervalId);
+            if (intervalId) {
+                window.clearInterval(intervalId);
+            }
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+            }
         };
-    }, [onCurrentPositionChange]);
+    }, [isGuidanceActive, onCurrentPositionChange, onCurrentSpeedChange]);
 
     useEffect(() => {
         return () => {
@@ -270,9 +310,9 @@ export function CatchMap({
                         key={`route-${route.id}`}
                         positions={route.latlngs}
                         pathOptions={{
-                            color: route.is_owner ? '#f59e0b' : '#60a5fa',
-                            weight: 4,
-                            opacity: 0.8,
+                            color: route.id === activeGuidanceRouteId ? '#14b8a6' : route.is_owner ? '#f59e0b' : '#60a5fa',
+                            weight: route.id === activeGuidanceRouteId ? 6 : 4,
+                            opacity: route.id === activeGuidanceRouteId ? 0.95 : 0.8,
                         }}
                     >
                         <Popup className="fishmap-popup fishmap-popup--route">
@@ -288,6 +328,9 @@ export function CatchMap({
                                 </div>
 
                                 <div className="fishmap-popup-actions">
+                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--secondary" onClick={() => onStartRouteGuidance(route)}>
+                                        {t('dashboard.guide_route')}
+                                    </button>
                                     {route.is_owner && canRecordRoutes ? (
                                         <>
                                             <button
@@ -319,6 +362,18 @@ export function CatchMap({
                             color: '#22c55e',
                             weight: 5,
                             opacity: 0.95,
+                        }}
+                    />
+                ) : null}
+
+                {displayedPosition && guidanceNearestPoint ? (
+                    <Polyline
+                        positions={[displayedPosition, guidanceNearestPoint]}
+                        pathOptions={{
+                            color: '#14b8a6',
+                            weight: 3,
+                            opacity: 0.85,
+                            dashArray: '8 8',
                         }}
                     />
                 ) : null}

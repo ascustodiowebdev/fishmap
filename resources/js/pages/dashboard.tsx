@@ -6,7 +6,7 @@ import { useTranslator } from '@/lib/i18n';
 import { type BreadcrumbItem, type CatchLog, type MapFocusRequest, type NavigationRoute, type SharedData } from '@/types';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Waves, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Route as RouteIcon, Waves, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -22,6 +22,13 @@ interface DashboardProps {
 type CatchFlowStep = 'action' | 'location-mode' | 'confirm-location' | 'details' | 'navigation' | 'delete' | 'success';
 type RouteDialogMode = 'create' | 'edit' | 'delete' | null;
 type LibraryDialogMode = 'spots' | 'routes' | null;
+
+interface RouteGuidanceMetrics {
+    nearestPoint: [number, number];
+    offCourseMeters: number;
+    rejoinBearing: number;
+    onCourse: boolean;
+}
 
 const inputClassName =
     'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-teal-400 dark:focus:ring-teal-900/40';
@@ -50,12 +57,10 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const holdOpenTimer = useRef<number | null>(null);
     const [isRecordingRoute, setIsRecordingRoute] = useState(false);
     const [routeSimulationEnabled, setRouteSimulationEnabled] = useState(false);
-    const [routeSimulationPickMode, setRouteSimulationPickMode] = useState(false);
     const [recordingVisibility, setRecordingVisibility] = useState<'private' | 'public'>('private');
     const [recordingStartedAt, setRecordingStartedAt] = useState<string | null>(null);
     const [activeRoutePoints, setActiveRoutePoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
     const [simulatedPosition, setSimulatedPosition] = useState<[number, number] | null>(null);
-    const simulationStep = useRef(0);
     const [routeDialogOpen, setRouteDialogOpen] = useState(false);
     const [routeDialogMode, setRouteDialogMode] = useState<RouteDialogMode>(null);
     const [activeRoute, setActiveRoute] = useState<NavigationRoute | null>(null);
@@ -64,6 +69,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const [mapFocusRequest, setMapFocusRequest] = useState<MapFocusRequest | null>(null);
     const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
     const [libraryDialogMode, setLibraryDialogMode] = useState<LibraryDialogMode>(null);
+    const [guidedRouteId, setGuidedRouteId] = useState<number | null>(null);
+    const [pendingGuidanceRoute, setPendingGuidanceRoute] = useState<NavigationRoute | null>(null);
+    const [guidanceConfirmOpen, setGuidanceConfirmOpen] = useState(false);
+    const [currentSpeedKmh, setCurrentSpeedKmh] = useState<number | null>(null);
+    const [gpsSpeedKmh, setGpsSpeedKmh] = useState<number | null>(null);
+    const lastMovementSample = useRef<{ position: [number, number]; timestamp: number } | null>(null);
 
     const form = useForm({
         species: '',
@@ -112,12 +123,35 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         [catchLogs],
     );
 
+    const guidedRoute = useMemo(
+        () => navigationRoutes.find((navigationRoute) => navigationRoute.id === guidedRouteId) ?? null,
+        [guidedRouteId, navigationRoutes],
+    );
+
+    const guidancePosition = routeSimulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
+
+    const guidanceMetrics = useMemo<RouteGuidanceMetrics | null>(() => {
+        if (!guidedRoute || !guidancePosition) {
+            return null;
+        }
+
+        return computeRouteGuidance(guidancePosition, guidedRoute);
+    }, [guidancePosition, guidedRoute]);
+
+    const isGuidanceActive = Boolean(guidedRoute);
+    const displayedSpeedKmh = routeSimulationEnabled ? currentSpeedKmh : gpsSpeedKmh ?? currentSpeedKmh;
+
     useEffect(() => {
         if (!routeSimulationEnabled && !isRecordingRoute) {
             setSimulatedPosition(null);
-            setRouteSimulationPickMode(false);
         }
     }, [isRecordingRoute, routeSimulationEnabled]);
+
+    useEffect(() => {
+        if (guidedRouteId && !guidedRoute) {
+            setGuidedRouteId(null);
+        }
+    }, [guidedRoute, guidedRouteId]);
 
     useEffect(() => {
         if (dialogOpen || routeDialogOpen) {
@@ -126,58 +160,33 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     }, [dialogOpen, routeDialogOpen]);
 
     useEffect(() => {
-        if (!routeSimulationEnabled || !isRecordingRoute) {
+        if (!displayTrackedPosition) {
+            lastMovementSample.current = null;
+            setCurrentSpeedKmh(null);
             return;
         }
 
-        const handleKeyDown = (event: KeyboardEvent) => {
-            const target = event.target as HTMLElement | null;
-            const tagName = target?.tagName?.toLowerCase();
+        const now = Date.now();
+        const previousSample = lastMovementSample.current;
 
-            if (tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target?.isContentEditable) {
-                return;
-            }
+        if (!previousSample) {
+            lastMovementSample.current = { position: displayTrackedPosition, timestamp: now };
+            setCurrentSpeedKmh(0);
+            return;
+        }
 
-            const key = event.key.toLowerCase();
-            const step = 0.00018;
-            const delta =
-                key === 'w'
-                    ? [step, 0]
-                    : key === 's'
-                      ? [-step, 0]
-                      : key === 'a'
-                        ? [0, -step]
-                        : key === 'd'
-                          ? [0, step]
-                          : null;
+        const elapsedMilliseconds = now - previousSample.timestamp;
 
-            if (!delta) {
-                return;
-            }
+        if (elapsedMilliseconds <= 0) {
+            return;
+        }
 
-            event.preventDefault();
+        const distanceMeters = calculateDistanceMeters(previousSample.position, displayTrackedPosition);
+        const nextSpeedKmh = distanceMeters < 1 ? 0 : (distanceMeters / elapsedMilliseconds) * 3600;
 
-            setSimulatedPosition((current) => {
-                const base = current ?? currentTrackedPosition ?? [38.7223, -9.1393];
-                const nextPosition: [number, number] = [base[0] + delta[0], base[1] + delta[1]];
-
-                setActiveRoutePoints((currentPoints) => [
-                    ...currentPoints,
-                    {
-                        latitude: nextPosition[0],
-                        longitude: nextPosition[1],
-                        recorded_at: new Date().toISOString(),
-                    },
-                ]);
-
-                return nextPosition;
-            });
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [currentTrackedPosition, isRecordingRoute, routeSimulationEnabled]);
+        setCurrentSpeedKmh(nextSpeedKmh);
+        lastMovementSample.current = { position: displayTrackedPosition, timestamp: now };
+    }, [displayTrackedPosition]);
 
     const setCoordinates = useCallback(
         ([latitude, longitude]: [number, number]) => {
@@ -410,6 +419,30 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         setLibraryDialogOpen(true);
     }, []);
 
+    const requestRouteGuidance = useCallback((navigationRoute: NavigationRoute) => {
+        setPendingGuidanceRoute(navigationRoute);
+        setGuidanceConfirmOpen(true);
+        setLibraryDialogOpen(false);
+        setLibraryDialogMode(null);
+        setMobileHudOpen(false);
+    }, []);
+
+    const startRouteGuidance = useCallback(
+        (navigationRoute: NavigationRoute) => {
+            setGuidedRouteId(navigationRoute.id);
+            focusNavigationRoute(navigationRoute);
+            setPendingGuidanceRoute(null);
+            setGuidanceConfirmOpen(false);
+        },
+        [focusNavigationRoute],
+    );
+
+    const stopRouteGuidance = useCallback(() => {
+        setGuidedRouteId(null);
+        setPendingGuidanceRoute(null);
+        setGuidanceConfirmOpen(false);
+    }, []);
+
     const startRouteRecording = useCallback(
         (forcedStartPosition?: [number, number] | null) => {
             if (!canRecordRoutes) {
@@ -435,7 +468,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             ]);
             setRecordingStartedAt(startedAt);
             setIsRecordingRoute(true);
-            setRouteSimulationPickMode(false);
             setRouteDialogOpen(false);
             setRouteDialogMode(null);
             setDialogOpen(false);
@@ -445,7 +477,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             setActiveRoute(null);
 
             if (routeSimulationEnabled) {
-                simulationStep.current = 0;
                 setSimulatedPosition(startPosition);
             }
         },
@@ -461,7 +492,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             setIsRecordingRoute(false);
             setActiveRoutePoints([]);
             setRecordingStartedAt(null);
-            setRouteSimulationPickMode(false);
             return;
         }
 
@@ -586,8 +616,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 onSuccess: () => {
                     setRouteDialogOpen(false);
                     resetRouteDraft();
-                    simulationStep.current = 0;
-                    setRouteSimulationPickMode(false);
                 },
             },
         );
@@ -622,6 +650,25 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         }
         setDialogOpen(false);
         setMapPickMode(true);
+    }, []);
+
+    const appendRoutePoint = useCallback((position: [number, number]) => {
+        setActiveRoutePoints((currentPoints) => {
+            const latestPoint = currentPoints.at(-1);
+
+            if (latestPoint && Math.abs(latestPoint.latitude - position[0]) < 0.0000001 && Math.abs(latestPoint.longitude - position[1]) < 0.0000001) {
+                return currentPoints;
+            }
+
+            return [
+                ...currentPoints,
+                {
+                    latitude: position[0],
+                    longitude: position[1],
+                    recorded_at: new Date().toISOString(),
+                },
+            ];
+        });
     }, []);
 
     const continueToFishDetails = useCallback(() => {
@@ -767,20 +814,22 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         activeRoutePoints={activeRoutePolyline}
                         positionOverride={displayTrackedPosition}
                         selectedPosition={selectedPosition}
-                        allowTapSelection={mapPickMode || routeSimulationPickMode}
+                        allowTapSelection={mapPickMode || routeSimulationEnabled}
                         onSelectPosition={(position) => {
-                            if (routeSimulationPickMode) {
-                                setSimulatedPosition(position);
-                                startRouteRecording(position);
-                                return;
-                            }
-
-                            setCoordinates(position);
-
                             if (mapPickMode) {
+                                setCoordinates(position);
                                 setMapPickMode(false);
                                 setDialogStep('confirm-location');
                                 setDialogOpen(true);
+                                return;
+                            }
+
+                            if (routeSimulationEnabled) {
+                                setSimulatedPosition(position);
+
+                                if (isRecordingRoute) {
+                                    appendRoutePoint(position);
+                                }
                             }
                         }}
                         onClearSelection={() => {
@@ -800,10 +849,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         }}
                         onCurrentPositionChange={(position) => {
                             setCurrentTrackedPosition(position);
-                            if (!selectedPosition && position) {
+                            if (!routeSimulationEnabled && !selectedPosition && position) {
                                 setCoordinates(position);
                             }
                         }}
+                        onCurrentSpeedChange={setGpsSpeedKmh}
                         onInteractionChange={() => undefined}
                         recenterToCurrentSignal={recenterSignal}
                         externalFocusRequest={mapFocusRequest}
@@ -813,11 +863,15 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         onDeleteCatch={openDeleteDialog}
                         onEditRoute={openRouteEditDialog}
                         onDeleteRoute={openRouteDeleteDialog}
+                        onStartRouteGuidance={requestRouteGuidance}
                         canRecordRoutes={canRecordRoutes}
+                        activeGuidanceRouteId={guidedRouteId}
+                        guidanceNearestPoint={guidanceMetrics?.nearestPoint ?? null}
+                        isGuidanceActive={isGuidanceActive}
                     />
 
                     <div
-                        className={`pointer-events-none absolute inset-x-4 top-4 z-[520] flex flex-col gap-3 transition-opacity duration-200 md:left-4 md:right-auto md:w-[360px] ${
+                        className={`pointer-events-none absolute inset-x-4 top-4 z-[520] flex max-w-[calc(100%-2rem)] flex-col gap-3 transition-opacity duration-200 md:left-4 md:right-auto md:w-[360px] md:max-w-none ${
                             isInitialMapLoading ? 'opacity-0' : 'opacity-100'
                         }`}
                     >
@@ -848,38 +902,47 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                 <p className="mt-2 text-sm leading-6 text-slate-600">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
                             </div>
 
-                            <div className="grid grid-cols-3 gap-3">
-                                <StatCard icon={Fish} label={t('dashboard.fish_spots')} value={fishSpotCount} onClick={() => openLibraryDialog('spots')} />
-                                <StatCard icon={Globe} label={t('dashboard.routes')} value={routeCount} onClick={() => openLibraryDialog('routes')} />
-                                <StatCard icon={Waves} label={t('dashboard.latest')} value={latestTripLabel} compact />
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                                <StatCard
+                                    icon={Fish}
+                                    label={t('dashboard.fish_spots')}
+                                    value={fishSpotCount}
+                                    onClick={() => openLibraryDialog('spots')}
+                                />
+                                <StatCard
+                                    icon={Globe}
+                                    label={t('dashboard.routes')}
+                                    value={routeCount}
+                                    onClick={() => openLibraryDialog('routes')}
+                                />
+                                <StatCard icon={Waves} label={t('dashboard.latest')} value={latestTripLabel} compact className="col-span-2 md:col-span-1" />
                             </div>
 
                             {canRecordRoutes ? (
                             <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
-                                <div className="flex items-center justify-between gap-3">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                     <div>
                                         <p className="text-sm font-semibold text-slate-950">{t('dashboard.route_recording')}</p>
                                         <p className="mt-1 text-xs text-slate-600">
                                             {isRecordingRoute
                                                 ? t('dashboard.route_recording_live', { count: activeRoutePoints.length })
-                                                : routeSimulationPickMode
-                                                  ? t('dashboard.simulation_pick_start')
+                                                : routeSimulationEnabled
+                                                  ? t('dashboard.simulation_click_move')
                                                   : t('dashboard.route_recording_idle')}
                                         </p>
-                                        {routeSimulationPickMode ? (
+                                        {routeSimulationEnabled ? (
                                             <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.18em] text-teal-700">
-                                                {t('dashboard.simulation_pick_start')}
+                                                {t('dashboard.simulation_click_move')}
                                             </p>
                                         ) : null}
                                     </div>
-                                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                                    <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto">
                                         <input
                                             type="checkbox"
                                             checked={routeSimulationEnabled}
                                             onChange={(event) => {
                                                 const checked = event.target.checked;
                                                 setRouteSimulationEnabled(checked);
-                                                setRouteSimulationPickMode(checked);
 
                                                 if (!checked) {
                                                     setSimulatedPosition(null);
@@ -905,17 +968,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                             {t('dashboard.stop_recording')}
                                         </Button>
                                     ) : (
-                                        <Button
-                                            type="button"
-                                            onClick={() => {
-                                                if (routeSimulationEnabled) {
-                                                    setRouteSimulationPickMode(true);
-                                                    return;
-                                                }
-
-                                                startRouteRecording();
-                                            }}
-                                        >
+                                        <Button type="button" onClick={() => startRouteRecording()}>
                                             {t('dashboard.start_recording')}
                                         </Button>
                                     )}
@@ -930,6 +983,122 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                             ) : null}
                         </div>
                     </div>
+
+                    {guidedRoute ? (
+                        <div className="pointer-events-none absolute inset-x-4 bottom-28 z-[515] md:right-5 md:bottom-24 md:left-auto md:w-[340px]">
+                            <div className="pointer-events-auto rounded-[1.5rem] border border-white/70 bg-white/92 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-xs font-semibold tracking-[0.18em] text-teal-700 uppercase">{t('dashboard.route_guidance')}</p>
+                                        <h3 className="mt-1 text-lg font-semibold text-slate-950 dark:text-slate-50">{guidedRoute.name}</h3>
+                                    </div>
+                                    <Button type="button" variant="outline" className="rounded-full" onClick={stopRouteGuidance}>
+                                        {t('dashboard.stop_guidance')}
+                                    </Button>
+                                </div>
+
+                                <div className="mt-4 grid gap-4">
+                                    <div className="flex items-center gap-4">
+                                        <div className="relative flex size-20 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
+                                            <div className="absolute inset-2 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
+                                            {guidancePosition ? (
+                                                <ArrowUp
+                                                    className="size-9 transition-transform duration-200"
+                                                    style={{ transform: `rotate(${guidanceMetrics?.rejoinBearing ?? 0}deg)` }}
+                                                />
+                                            ) : (
+                                                <RouteIcon className="size-9" />
+                                            )}
+                                        </div>
+
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">
+                                                {!guidancePosition
+                                                    ? t('dashboard.guidance_waiting_position')
+                                                    : guidanceMetrics?.onCourse
+                                                      ? t('dashboard.guidance_stay_on_course')
+                                                      : t('dashboard.guidance_rejoin_line')}
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                                {!guidancePosition || !guidanceMetrics
+                                                    ? t('dashboard.guidance_waiting_position_copy')
+                                                    : t('dashboard.guidance_metrics', {
+                                                          distance: formatDistanceMeters(guidanceMetrics.offCourseMeters),
+                                                          bearing: formatBearing(guidanceMetrics.rejoinBearing),
+                                                      })}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/70">
+                                            <p className="text-[10px] font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">{t('dashboard.speed')}</p>
+                                            <p className="mt-1 text-base font-semibold text-slate-950 dark:text-slate-50">{formatSpeedKmh(displayedSpeedKmh)}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/70">
+                                            <p className="text-[10px] font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">{t('dashboard.off_line_short')}</p>
+                                            <p className="mt-1 text-base font-semibold text-slate-950 dark:text-slate-50">
+                                                {guidanceMetrics ? formatDistanceMeters(guidanceMetrics.offCourseMeters) : '--'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ) : null}
+
+                    <div className="pointer-events-none absolute bottom-28 left-3 z-[500] md:bottom-20 md:left-5">
+                        <div className="pointer-events-auto rounded-full border border-white/70 bg-white/90 px-3 py-2 text-xs font-semibold text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 dark:text-slate-100">
+                            {t('dashboard.speed')}: {formatSpeedKmh(displayedSpeedKmh)}
+                        </div>
+                    </div>
+
+                    <Dialog
+                        open={guidanceConfirmOpen}
+                        onOpenChange={(open) => {
+                            setGuidanceConfirmOpen(open);
+                            if (!open) {
+                                setPendingGuidanceRoute(null);
+                            }
+                        }}
+                    >
+                        <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-lg sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
+                            <div className="relative flex max-h-[92dvh] min-h-0 flex-col overflow-hidden p-5 sm:max-h-[85vh] sm:p-6">
+                                <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
+                                <DialogHeader>
+                                    <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.confirm_route_guidance')}</DialogTitle>
+                                    <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                        {t('dashboard.confirm_route_guidance_copy')}
+                                    </DialogDescription>
+                                </DialogHeader>
+
+                                {pendingGuidanceRoute ? (
+                                    <div className="mt-5 rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950/70">
+                                        <p className="font-semibold text-slate-950 dark:text-slate-50">{pendingGuidanceRoute.name}</p>
+                                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                            {t('dashboard.route_points', { count: pendingGuidanceRoute.point_count })}
+                                        </p>
+                                    </div>
+                                ) : null}
+
+                                <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <Button type="button" variant="outline" onClick={() => setGuidanceConfirmOpen(false)}>
+                                        {t('common.cancel')}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        onClick={() => {
+                                            if (pendingGuidanceRoute) {
+                                                startRouteGuidance(pendingGuidanceRoute);
+                                            }
+                                        }}
+                                    >
+                                        {t('dashboard.start_guidance')}
+                                    </Button>
+                                </div>
+                            </div>
+                        </DialogContent>
+                    </Dialog>
 
                     <Dialog
                         open={libraryDialogOpen}
@@ -1014,7 +1183,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                                 <button
                                                     key={`route-library-${navigationRoute.id}`}
                                                     type="button"
-                                                    onClick={() => focusNavigationRoute(navigationRoute)}
+                                                    onClick={() => requestRouteGuidance(navigationRoute)}
                                                     className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
                                                 >
                                                     <div className="flex items-center justify-between gap-3">
@@ -1571,18 +1740,20 @@ function StatCard({
     value,
     compact = false,
     onClick,
+    className = '',
 }: {
     icon: typeof Fish;
     label: string;
     value: string;
     compact?: boolean;
     onClick?: () => void;
+    className?: string;
 }) {
     return (
         <button
             type="button"
             onClick={onClick}
-            className={`rounded-[1.35rem] border border-white/70 bg-white/88 p-4 text-left shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur ${onClick ? 'transition hover:-translate-y-0.5 hover:border-teal-200' : ''}`}
+            className={`rounded-[1.35rem] border border-white/70 bg-white/88 p-4 text-left shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur ${onClick ? 'transition hover:-translate-y-0.5 hover:border-teal-200' : ''} ${className}`}
         >
             <Icon className="size-4 text-teal-700" />
             <p className={`mt-3 font-semibold text-slate-950 ${compact ? 'text-sm' : 'text-2xl'}`}>{value}</p>
@@ -1638,4 +1809,129 @@ function buildCaughtAtIso(dateValue: string, timeValue: string) {
     }
 
     return parsed.toISOString();
+}
+
+function computeRouteGuidance(position: [number, number], route: NavigationRoute): RouteGuidanceMetrics | null {
+    const routePoints = route.points
+        .map((point) => [Number(point.latitude), Number(point.longitude)] as [number, number])
+        .filter(([latitude, longitude]) => Number.isFinite(latitude) && Number.isFinite(longitude));
+
+    if (routePoints.length < 2) {
+        return null;
+    }
+
+    const referenceLatitude = (position[0] * Math.PI) / 180;
+    const metersPerLon = 111320 * Math.cos(referenceLatitude);
+    const metersPerLat = 110540;
+    const toXY = ([latitude, longitude]: [number, number]) => ({
+        x: longitude * metersPerLon,
+        y: latitude * metersPerLat,
+    });
+
+    const current = toXY(position);
+    let bestMatch:
+        | {
+              distance: number;
+              nearestPoint: [number, number];
+              rejoinBearing: number;
+              onCourse: boolean;
+          }
+        | null = null;
+
+    for (let index = 0; index < routePoints.length - 1; index += 1) {
+        const startLatLng = routePoints[index];
+        const endLatLng = routePoints[index + 1];
+        const start = toXY(startLatLng);
+        const end = toXY(endLatLng);
+        const segment = { x: end.x - start.x, y: end.y - start.y };
+        const segmentLengthSquared = segment.x ** 2 + segment.y ** 2;
+
+        if (segmentLengthSquared === 0) {
+            continue;
+        }
+
+        const relative = { x: current.x - start.x, y: current.y - start.y };
+        const segmentProgress = Math.min(1, Math.max(0, (relative.x * segment.x + relative.y * segment.y) / segmentLengthSquared));
+        const nearestXY = {
+            x: start.x + segment.x * segmentProgress,
+            y: start.y + segment.y * segmentProgress,
+        };
+        const nearestPoint: [number, number] = [
+            startLatLng[0] + (endLatLng[0] - startLatLng[0]) * segmentProgress,
+            startLatLng[1] + (endLatLng[1] - startLatLng[1]) * segmentProgress,
+        ];
+        const distance = Math.hypot(current.x - nearestXY.x, current.y - nearestXY.y);
+
+        if (!bestMatch || distance < bestMatch.distance) {
+            bestMatch = {
+                distance,
+                nearestPoint,
+                rejoinBearing: calculateBearing(position, nearestPoint),
+                onCourse: distance <= 12,
+            };
+        }
+    }
+
+    if (!bestMatch) {
+        return null;
+    }
+
+    return {
+        nearestPoint: bestMatch.nearestPoint,
+        offCourseMeters: bestMatch.distance,
+        rejoinBearing: bestMatch.rejoinBearing,
+        onCourse: bestMatch.onCourse,
+    };
+}
+
+function calculateBearing(start: [number, number], end: [number, number]) {
+    const [startLat, startLng] = start;
+    const [endLat, endLng] = end;
+    const startLatRad = (startLat * Math.PI) / 180;
+    const endLatRad = (endLat * Math.PI) / 180;
+    const deltaLngRad = ((endLng - startLng) * Math.PI) / 180;
+
+    const y = Math.sin(deltaLngRad) * Math.cos(endLatRad);
+    const x =
+        Math.cos(startLatRad) * Math.sin(endLatRad) -
+        Math.sin(startLatRad) * Math.cos(endLatRad) * Math.cos(deltaLngRad);
+
+    return (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360;
+}
+
+function formatDistanceMeters(distance: number) {
+    if (distance >= 1000) {
+        return `${(distance / 1000).toFixed(1)} km`;
+    }
+
+    return `${Math.round(distance)} m`;
+}
+
+function formatSpeedKmh(speed: number | null) {
+    if (speed === null || !Number.isFinite(speed)) {
+        return '--';
+    }
+
+    return `${speed.toFixed(speed >= 10 ? 0 : 1)} km/h`;
+}
+
+function calculateDistanceMeters(start: [number, number], end: [number, number]) {
+    const earthRadiusMeters = 6371000;
+    const deltaLat = ((end[0] - start[0]) * Math.PI) / 180;
+    const deltaLng = ((end[1] - start[1]) * Math.PI) / 180;
+    const startLat = (start[0] * Math.PI) / 180;
+    const endLat = (end[0] * Math.PI) / 180;
+
+    const a = Math.sin(deltaLat / 2) ** 2 + Math.cos(startLat) * Math.cos(endLat) * Math.sin(deltaLng / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return earthRadiusMeters * c;
+}
+
+function formatBearing(bearing: number) {
+    const normalized = ((bearing % 360) + 360) % 360;
+    const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const cardinal = cardinals[Math.round(normalized / 45) % 8];
+
+    return `${Math.round(normalized)}° ${cardinal}`;
 }
