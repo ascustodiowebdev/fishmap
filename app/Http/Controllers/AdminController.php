@@ -91,6 +91,7 @@ class AdminController extends Controller
 
         return Inertia::render('admin/index', [
             'maintenanceMode' => AppSetting::getBoolean('maintenance_mode'),
+            'registrationsOpen' => AppSetting::getBoolean('registrations_open', true),
             'users' => $users,
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
@@ -113,6 +114,19 @@ class AdminController extends Controller
         return back()->with('success', $validated['enabled']
             ? 'Maintenance mode is now active. Only the admin can access app pages.'
             : 'Maintenance mode has been turned off.');
+    }
+
+    public function updateRegistrations(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'enabled' => ['required', 'boolean'],
+        ]);
+
+        AppSetting::setValue('registrations_open', $validated['enabled'] ? '1' : '0');
+
+        return back()->with('success', $validated['enabled']
+            ? 'New registrations are now enabled.'
+            : 'New registrations are now disabled.');
     }
 
     public function destroyCatchLog(CatchLog $catchLog): RedirectResponse

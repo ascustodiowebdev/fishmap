@@ -39,6 +39,7 @@ Route::middleware(['auth', 'maintenance'])->group(function () {
 Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
     Route::get('/', [AdminController::class, 'index'])->name('index');
     Route::patch('maintenance', [AdminController::class, 'updateMaintenance'])->name('maintenance.update');
+    Route::patch('registrations', [AdminController::class, 'updateRegistrations'])->name('registrations.update');
     Route::post('users/{user}/password-reset', [AdminController::class, 'sendPasswordReset'])->name('users.password-reset');
     Route::delete('users/{user}', [AdminController::class, 'destroyUser'])->name('users.destroy');
     Route::delete('catch-logs/{catchLog}', [AdminController::class, 'destroyCatchLog'])->name('catch-logs.destroy');
