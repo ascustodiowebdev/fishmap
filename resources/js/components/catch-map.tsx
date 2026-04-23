@@ -1,5 +1,7 @@
 import { useTranslator } from '@/lib/i18n';
 import { type CatchLog, type MapBounds, type MapFocusRequest, type NavigationRoute } from '@/types';
+import { Capacitor } from '@capacitor/core';
+import { Geolocation } from '@capacitor/geolocation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -38,6 +40,12 @@ const defaultCenter: [number, number] = [38.7223, -9.1393];
 const satelliteKey = import.meta.env.VITE_MAPTILER_KEY;
 type BaseLayerMode = 'street' | 'nautical' | 'satellite';
 const layerOrder: BaseLayerMode[] = satelliteKey ? ['street', 'nautical', 'satellite'] : ['street', 'nautical'];
+type PositionCoordsLike = {
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+    speed?: number | null;
+};
 
 export function CatchMap({
     catchLogs,
@@ -86,75 +94,124 @@ export function CatchMap({
         .filter((catchLog) => Number.isFinite(catchLog.latitude) && Number.isFinite(catchLog.longitude));
 
     useEffect(() => {
-        if (!('geolocation' in navigator)) {
-            onCurrentPositionChange(null);
-            onCurrentSpeedChange(null);
-            return;
-        }
+        let webWatchId: number | null = null;
+        let nativeWatchId: string | null = null;
+        let cancelled = false;
 
-        if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            onCurrentPositionChange(null);
-            onCurrentSpeedChange(null);
-            return;
-        }
+        const applyPosition = (coords: PositionCoordsLike) => {
+            const nextPosition: [number, number] = [coords.latitude, coords.longitude];
+            setCurrentPosition(nextPosition);
+            setLocationAccuracy(Math.round(coords.accuracy));
+            onCurrentPositionChange(nextPosition);
+            onCurrentSpeedChange(typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? Math.max(coords.speed * 3.6, 0) : null);
 
-        const requestPosition = () => {
-            navigator.geolocation.getCurrentPosition(
+            if (!hasAutoCenteredRef.current) {
+                hasAutoCenteredRef.current = true;
+                setFocusRequest({
+                    center: nextPosition,
+                    key: Date.now(),
+                });
+            }
+        };
+
+        const startWebTracking = () => {
+            if (!('geolocation' in navigator)) {
+                onCurrentPositionChange(null);
+                onCurrentSpeedChange(null);
+                return;
+            }
+
+            if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                onCurrentPositionChange(null);
+                onCurrentSpeedChange(null);
+                return;
+            }
+
+            const requestPosition = (enableHighAccuracy = true) => {
+                navigator.geolocation.getCurrentPosition(
+                    ({ coords }) => applyPosition(coords),
+                    () => undefined,
+                    {
+                        enableHighAccuracy,
+                        maximumAge: isGuidanceActive ? 1000 : 5000,
+                        timeout: isGuidanceActive ? 8000 : 12000,
+                    },
+                );
+            };
+
+            requestPosition();
+
+            webWatchId = navigator.geolocation.watchPosition(
                 ({ coords }) => {
-                    const nextPosition: [number, number] = [coords.latitude, coords.longitude];
-                    setCurrentPosition(nextPosition);
-                    setLocationAccuracy(Math.round(coords.accuracy));
-                    onCurrentPositionChange(nextPosition);
-                    onCurrentSpeedChange(typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? Math.max(coords.speed * 3.6, 0) : null);
-
-                    if (!hasAutoCenteredRef.current) {
-                        hasAutoCenteredRef.current = true;
-                        setFocusRequest({
-                            center: nextPosition,
-                            key: Date.now(),
-                        });
+                    applyPosition(coords);
+                },
+                (error) => {
+                    if (error.code === error.TIMEOUT || error.code === error.POSITION_UNAVAILABLE) {
+                        requestPosition(false);
                     }
                 },
-                () => undefined,
                 {
                     enableHighAccuracy: true,
-                    maximumAge: isGuidanceActive ? 1000 : 5000,
-                    timeout: isGuidanceActive ? 5000 : 10000,
+                    maximumAge: 3000,
+                    timeout: 12000,
                 },
             );
         };
 
-        requestPosition();
+        const startNativeTracking = async () => {
+            try {
+                const permission = await Geolocation.requestPermissions();
 
-        let intervalId: number | null = null;
-        let watchId: number | null = null;
+                if (permission.location !== 'granted' && permission.coarseLocation !== 'granted') {
+                    onCurrentPositionChange(null);
+                    onCurrentSpeedChange(null);
+                    return;
+                }
 
-        if (isGuidanceActive) {
-            watchId = navigator.geolocation.watchPosition(
-                ({ coords }) => {
-                    const nextPosition: [number, number] = [coords.latitude, coords.longitude];
-                    setCurrentPosition(nextPosition);
-                    setLocationAccuracy(Math.round(coords.accuracy));
-                    onCurrentPositionChange(nextPosition);
-                    onCurrentSpeedChange(typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? Math.max(coords.speed * 3.6, 0) : null);
-                },
-                () => undefined,
-                {
+                const current = await Geolocation.getCurrentPosition({
                     enableHighAccuracy: true,
-                    maximumAge: 1000,
-                    timeout: 5000,
-                },
-            );
+                    timeout: isGuidanceActive ? 8000 : 12000,
+                    maximumAge: isGuidanceActive ? 1000 : 5000,
+                });
+
+                if (!cancelled) {
+                    applyPosition(current.coords);
+                }
+
+                nativeWatchId = await Geolocation.watchPosition(
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 12000,
+                        maximumAge: 3000,
+                    },
+                    (position) => {
+                        if (cancelled || !position) {
+                            return;
+                        }
+
+                        applyPosition(position.coords);
+                    },
+                );
+            } catch {
+                startWebTracking();
+            }
+        };
+
+        if (Capacitor.isNativePlatform()) {
+            void startNativeTracking();
         } else {
-            intervalId = window.setInterval(requestPosition, 10000);
+            startWebTracking();
         }
 
         return () => {
-            if (intervalId) {
-                window.clearInterval(intervalId);
+            cancelled = true;
+
+            if (webWatchId !== null) {
+                navigator.geolocation.clearWatch(webWatchId);
             }
-            if (watchId !== null) {
-                navigator.geolocation.clearWatch(watchId);
+
+            if (nativeWatchId) {
+                void Geolocation.clearWatch({ id: nativeWatchId });
             }
         };
     }, [isGuidanceActive, onCurrentPositionChange, onCurrentSpeedChange]);

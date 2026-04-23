@@ -11,8 +11,6 @@ class NavigationRouteController extends Controller
 {
     public function store(Request $request): RedirectResponse
     {
-        abort_unless($request->user()?->isAdmin(), 403);
-
         $validated = $this->validateRouteMeta($request, true);
 
         $points = collect($validated['points'])->values();
@@ -47,7 +45,6 @@ class NavigationRouteController extends Controller
 
     public function update(Request $request, NavigationRoute $navigationRoute): RedirectResponse
     {
-        abort_unless($request->user()?->isAdmin(), 403);
         abort_unless($navigationRoute->user_id === $request->user()?->id, 403);
 
         $validated = $this->validateRouteMeta($request, false);
@@ -66,7 +63,6 @@ class NavigationRouteController extends Controller
 
     public function destroy(Request $request, NavigationRoute $navigationRoute): RedirectResponse
     {
-        abort_unless($request->user()?->isAdmin(), 403);
         abort_unless($navigationRoute->user_id === $request->user()?->id, 403);
 
         $navigationRoute->delete();

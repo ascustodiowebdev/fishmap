@@ -4,6 +4,8 @@
     "scripts": {
         "build": "vite build",
         "build:ssr": "vite build && vite build --ssr",
+        "cap:sync:android": "npx cap sync android",
+        "cap:open:android": "npx cap open android",
         "dev": "vite",
         "format": "prettier --write resources/",
         "format:check": "prettier --check resources/",
@@ -21,6 +23,10 @@
         "typescript-eslint": "^8.23.0"
     },
     "dependencies": {
+        "@capacitor/android": "^8.3.1",
+        "@capacitor/cli": "^8.3.1",
+        "@capacitor/core": "^8.3.1",
+        "@capacitor/geolocation": "^8.2.0",
         "@headlessui/react": "^2.2.0",
         "@inertiajs/react": "^2.0.0",
         "@radix-ui/react-avatar": "^1.1.3",
