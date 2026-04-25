@@ -1,12 +1,14 @@
-import { CatchMap } from '@/components/catch-map';
+﻿import { CatchMap } from '@/components/catch-map';
 import AppWordmark from '@/components/app-wordmark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useTranslator } from '@/lib/i18n';
 import { type BreadcrumbItem, type CatchLog, type MapFocusRequest, type NavigationRoute, type SharedData } from '@/types';
+import { Capacitor } from '@capacitor/core';
+import { Geolocation } from '@capacitor/geolocation';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Route as RouteIcon, Waves, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Waves, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -36,7 +38,8 @@ const inputClassName =
 export default function Dashboard({ catchLogs, navigationRoutes, stats }: DashboardProps) {
     const { flash, auth } = usePage<SharedData>().props;
     const { t } = useTranslator();
-    const canRecordRoutes = Boolean(auth.user?.is_admin);
+    const canRecordRoutes = Boolean(auth.user);
+    const canSimulateRoutes = Boolean(auth.user?.is_admin);
     const breadcrumbs: BreadcrumbItem[] = [
         {
             title: 'Fishmap',
@@ -74,7 +77,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const [guidanceConfirmOpen, setGuidanceConfirmOpen] = useState(false);
     const [currentSpeedKmh, setCurrentSpeedKmh] = useState<number | null>(null);
     const [gpsSpeedKmh, setGpsSpeedKmh] = useState<number | null>(null);
+    const [currentHeadingDeg, setCurrentHeadingDeg] = useState<number | null>(null);
+    const [deviceHeadingDeg, setDeviceHeadingDeg] = useState<number | null>(null);
     const lastMovementSample = useRef<{ position: [number, number]; timestamp: number } | null>(null);
+    const [isMapInteracting, setIsMapInteracting] = useState(false);
+    const [followPausedByUser, setFollowPausedByUser] = useState(false);
 
     const form = useForm({
         species: '',
@@ -110,7 +117,8 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         return [latitude, longitude];
     }, [form.data.latitude, form.data.longitude]);
 
-    const displayTrackedPosition = routeSimulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
+    const simulationEnabled = canSimulateRoutes && routeSimulationEnabled;
+    const displayTrackedPosition = simulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
     const activeRoutePolyline = activeRoutePoints.map((point) => [point.latitude, point.longitude] as [number, number]);
 
     const privateFishSpots = useMemo(
@@ -128,7 +136,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         [guidedRouteId, navigationRoutes],
     );
 
-    const guidancePosition = routeSimulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
+    const guidancePosition = simulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
 
     const guidanceMetrics = useMemo<RouteGuidanceMetrics | null>(() => {
         if (!guidedRoute || !guidancePosition) {
@@ -139,13 +147,101 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     }, [guidancePosition, guidedRoute]);
 
     const isGuidanceActive = Boolean(guidedRoute);
-    const displayedSpeedKmh = routeSimulationEnabled ? currentSpeedKmh : gpsSpeedKmh ?? currentSpeedKmh;
+    const displayedSpeedKmh = simulationEnabled ? currentSpeedKmh : gpsSpeedKmh ?? currentSpeedKmh;
+    const shouldAutoFollowPosition =
+        (isRecordingRoute || isGuidanceActive) &&
+        !dialogOpen &&
+        !routeDialogOpen &&
+        !libraryDialogOpen &&
+        !guidanceConfirmOpen &&
+        !mobileHudOpen &&
+        !isMapInteracting &&
+        !followPausedByUser;
+    const guidanceArrowRotation = useMemo(() => {
+        if (!guidanceMetrics) {
+            return 0;
+        }
+
+        const effectiveHeading = deviceHeadingDeg ?? currentHeadingDeg;
+
+        if (effectiveHeading === null) {
+            return guidanceMetrics.rejoinBearing;
+        }
+
+        return ((guidanceMetrics.rejoinBearing - effectiveHeading) % 360 + 360) % 360;
+    }, [currentHeadingDeg, deviceHeadingDeg, guidanceMetrics]);
 
     useEffect(() => {
-        if (!routeSimulationEnabled && !isRecordingRoute) {
+        if (!canSimulateRoutes && routeSimulationEnabled) {
+            setRouteSimulationEnabled(false);
             setSimulatedPosition(null);
         }
-    }, [isRecordingRoute, routeSimulationEnabled]);
+    }, [canSimulateRoutes, routeSimulationEnabled]);
+
+    useEffect(() => {
+        if (!isGuidanceActive) {
+            setDeviceHeadingDeg(null);
+            return;
+        }
+
+        const onDeviceOrientation = (event: DeviceOrientationEvent) => {
+            const heading = extractDeviceHeading(event);
+
+            if (heading === null) {
+                return;
+            }
+
+            setDeviceHeadingDeg((previous) => {
+                if (previous === null) {
+                    return heading;
+                }
+
+                const delta = shortestCircularDiff(previous, heading);
+                const absoluteDelta = Math.abs(delta);
+
+                // Ignore tiny compass noise to prevent visible jitter.
+                if (absoluteDelta < 4.8) {
+                    return previous;
+                }
+
+                const factor = absoluteDelta > 35 ? 0.08 : 0.14;
+                const next = interpolateCircularDegrees(previous, heading, factor);
+
+                return limitCircularStep(previous, next, 6.5);
+            });
+        };
+
+        window.addEventListener('deviceorientationabsolute', onDeviceOrientation as EventListener, true);
+        window.addEventListener('deviceorientation', onDeviceOrientation as EventListener, true);
+
+        return () => {
+            window.removeEventListener('deviceorientationabsolute', onDeviceOrientation as EventListener, true);
+            window.removeEventListener('deviceorientation', onDeviceOrientation as EventListener, true);
+        };
+    }, [isGuidanceActive]);
+
+    useEffect(() => {
+        if (isRecordingRoute || isGuidanceActive) {
+            setFollowPausedByUser(false);
+        }
+    }, [isGuidanceActive, isRecordingRoute]);
+
+    useEffect(() => {
+        if (!shouldAutoFollowPosition || !displayTrackedPosition) {
+            return;
+        }
+
+        setMapFocusRequest({
+            center: displayTrackedPosition,
+            key: Date.now(),
+        });
+    }, [displayTrackedPosition, shouldAutoFollowPosition]);
+
+    useEffect(() => {
+        if (!simulationEnabled && !isRecordingRoute) {
+            setSimulatedPosition(null);
+        }
+    }, [isRecordingRoute, simulationEnabled]);
 
     useEffect(() => {
         if (guidedRouteId && !guidedRoute) {
@@ -163,6 +259,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         if (!displayTrackedPosition) {
             lastMovementSample.current = null;
             setCurrentSpeedKmh(null);
+            setCurrentHeadingDeg(null);
             return;
         }
 
@@ -183,6 +280,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
 
         const distanceMeters = calculateDistanceMeters(previousSample.position, displayTrackedPosition);
         const nextSpeedKmh = distanceMeters < 1 ? 0 : (distanceMeters / elapsedMilliseconds) * 3600;
+        if (distanceMeters >= 1) {
+            setCurrentHeadingDeg(calculateBearing(previousSample.position, displayTrackedPosition));
+        }
 
         setCurrentSpeedKmh(nextSpeedKmh);
         lastMovementSample.current = { position: displayTrackedPosition, timestamp: now };
@@ -228,7 +328,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         const intervalId = window.setInterval(() => {
             const now = new Date();
 
-            if (routeSimulationEnabled) {
+            if (simulationEnabled) {
                 return;
             }
 
@@ -247,7 +347,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         }, 1000);
 
         return () => window.clearInterval(intervalId);
-    }, [currentTrackedPosition, isRecordingRoute, routeSimulationEnabled]);
+    }, [currentTrackedPosition, isRecordingRoute, simulationEnabled]);
 
     const populateForm = useCallback(
         (catchLog?: CatchLog | null) => {
@@ -354,6 +454,31 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     }, []);
 
     const fetchCurrentPositionForCatch = useCallback(() => {
+        const fetchNative = async () => {
+            try {
+                const permission = await Geolocation.requestPermissions();
+
+                if (permission.location !== 'granted' && permission.coarseLocation !== 'granted') {
+                    return;
+                }
+
+                const position = await Geolocation.getCurrentPosition({
+                    enableHighAccuracy: true,
+                    maximumAge: 10000,
+                    timeout: 15000,
+                });
+
+                setCoordinates([position.coords.latitude, position.coords.longitude]);
+            } catch {
+                // Keep web fallback below.
+            }
+        };
+
+        if (Capacitor.isNativePlatform()) {
+            void fetchNative();
+            return;
+        }
+
         if (!('geolocation' in navigator)) {
             return;
         }
@@ -428,11 +553,17 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     }, []);
 
     const startRouteGuidance = useCallback(
-        (navigationRoute: NavigationRoute) => {
+        async (navigationRoute: NavigationRoute) => {
+            await requestDeviceHeadingPermission();
             setGuidedRouteId(navigationRoute.id);
             focusNavigationRoute(navigationRoute);
             setPendingGuidanceRoute(null);
             setGuidanceConfirmOpen(false);
+            setLibraryDialogOpen(false);
+            setLibraryDialogMode(null);
+            setMobileHudOpen(false);
+            setDialogOpen(false);
+            setRouteDialogOpen(false);
         },
         [focusNavigationRoute],
     );
@@ -449,7 +580,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 return;
             }
 
-            const startPosition = forcedStartPosition ?? (routeSimulationEnabled ? simulatedPosition ?? currentTrackedPosition ?? [38.7223, -9.1393] : currentTrackedPosition);
+            const startPosition = forcedStartPosition ?? (simulationEnabled ? simulatedPosition ?? currentTrackedPosition ?? [38.7223, -9.1393] : currentTrackedPosition);
 
             if (!startPosition) {
                 setSubmitError(t('dashboard.route_need_position'));
@@ -476,11 +607,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             setRouteSubmitError(null);
             setActiveRoute(null);
 
-            if (routeSimulationEnabled) {
+            if (simulationEnabled) {
                 setSimulatedPosition(startPosition);
             }
         },
-        [canRecordRoutes, currentTrackedPosition, routeSimulationEnabled, simulatedPosition, t],
+        [canRecordRoutes, currentTrackedPosition, simulationEnabled, simulatedPosition, t],
     );
 
     const stopRouteRecording = useCallback(() => {
@@ -537,10 +668,10 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         setRouteDialogMode(null);
         setActiveRoute(null);
         setRouteSubmitError(null);
-        if (!routeSimulationEnabled) {
+        if (!simulationEnabled) {
             setSimulatedPosition(null);
         }
-    }, [routeSimulationEnabled]);
+    }, [simulationEnabled]);
 
     const saveRoute = useCallback(() => {
         if (!canRecordRoutes) {
@@ -854,7 +985,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                             }
                         }}
                         onCurrentSpeedChange={setGpsSpeedKmh}
-                        onInteractionChange={() => undefined}
+                        onInteractionChange={(interacting) => {
+                            setIsMapInteracting(interacting);
+                            if (interacting && (isRecordingRoute || isGuidanceActive)) {
+                                setFollowPausedByUser(true);
+                            }
+                        }}
                         recenterToCurrentSignal={recenterSignal}
                         externalFocusRequest={mapFocusRequest}
                         onInitialLoadChange={setIsInitialMapLoading}
@@ -926,31 +1062,33 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                         <p className="mt-1 text-xs text-slate-600">
                                             {isRecordingRoute
                                                 ? t('dashboard.route_recording_live', { count: activeRoutePoints.length })
-                                                : routeSimulationEnabled
+                                                : simulationEnabled
                                                   ? t('dashboard.simulation_click_move')
                                                   : t('dashboard.route_recording_idle')}
                                         </p>
-                                        {routeSimulationEnabled ? (
+                                        {simulationEnabled ? (
                                             <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.18em] text-teal-700">
                                                 {t('dashboard.simulation_click_move')}
                                             </p>
                                         ) : null}
                                     </div>
-                                    <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto">
-                                        <input
-                                            type="checkbox"
-                                            checked={routeSimulationEnabled}
-                                            onChange={(event) => {
-                                                const checked = event.target.checked;
-                                                setRouteSimulationEnabled(checked);
+                                    {canSimulateRoutes ? (
+                                        <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto">
+                                            <input
+                                                type="checkbox"
+                                                checked={routeSimulationEnabled}
+                                                onChange={(event) => {
+                                                    const checked = event.target.checked;
+                                                    setRouteSimulationEnabled(checked);
 
-                                                if (!checked) {
-                                                    setSimulatedPosition(null);
-                                                }
-                                            }}
-                                        />
-                                        {t('dashboard.simulation')}
-                                    </label>
+                                                    if (!checked) {
+                                                        setSimulatedPosition(null);
+                                                    }
+                                                }}
+                                            />
+                                            {t('dashboard.simulation')}
+                                        </label>
+                                    ) : null}
                                 </div>
 
                                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -985,64 +1123,37 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                     </div>
 
                     {guidedRoute ? (
-                        <div className="pointer-events-none absolute inset-x-4 bottom-28 z-[515] md:right-5 md:bottom-24 md:left-auto md:w-[340px]">
-                            <div className="pointer-events-auto rounded-[1.5rem] border border-white/70 bg-white/92 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <p className="text-xs font-semibold tracking-[0.18em] text-teal-700 uppercase">{t('dashboard.route_guidance')}</p>
-                                        <h3 className="mt-1 text-lg font-semibold text-slate-950 dark:text-slate-50">{guidedRoute.name}</h3>
-                                    </div>
-                                    <Button type="button" variant="outline" className="rounded-full" onClick={stopRouteGuidance}>
-                                        {t('dashboard.stop_guidance')}
-                                    </Button>
+                        <div className="pointer-events-none absolute inset-x-4 bottom-28 z-[515] md:inset-x-auto md:right-5 md:bottom-24">
+                            <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/70 bg-white/92 px-3 py-2 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
+                                <div className="relative flex size-11 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
+                                    <div className="absolute inset-1 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
+                                    <ArrowUp className="size-5 transition-transform duration-200" style={{ transform: `rotate(${guidanceArrowRotation}deg)` }} />
                                 </div>
 
-                                <div className="mt-4 grid gap-4">
-                                    <div className="flex items-center gap-4">
-                                        <div className="relative flex size-20 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
-                                            <div className="absolute inset-2 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
-                                            {guidancePosition ? (
-                                                <ArrowUp
-                                                    className="size-9 transition-transform duration-200"
-                                                    style={{ transform: `rotate(${guidanceMetrics?.rejoinBearing ?? 0}deg)` }}
-                                                />
-                                            ) : (
-                                                <RouteIcon className="size-9" />
-                                            )}
-                                        </div>
-
-                                        <div className="min-w-0 flex-1">
-                                            <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">
-                                                {!guidancePosition
-                                                    ? t('dashboard.guidance_waiting_position')
-                                                    : guidanceMetrics?.onCourse
-                                                      ? t('dashboard.guidance_stay_on_course')
-                                                      : t('dashboard.guidance_rejoin_line')}
-                                            </p>
-                                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                                {!guidancePosition || !guidanceMetrics
-                                                    ? t('dashboard.guidance_waiting_position_copy')
-                                                    : t('dashboard.guidance_metrics', {
-                                                          distance: formatDistanceMeters(guidanceMetrics.offCourseMeters),
-                                                          bearing: formatBearing(guidanceMetrics.rejoinBearing),
-                                                      })}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/70">
-                                            <p className="text-[10px] font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">{t('dashboard.speed')}</p>
-                                            <p className="mt-1 text-base font-semibold text-slate-950 dark:text-slate-50">{formatSpeedKmh(displayedSpeedKmh)}</p>
-                                        </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/70">
-                                            <p className="text-[10px] font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">{t('dashboard.off_line_short')}</p>
-                                            <p className="mt-1 text-base font-semibold text-slate-950 dark:text-slate-50">
-                                                {guidanceMetrics ? formatDistanceMeters(guidanceMetrics.offCourseMeters) : '--'}
-                                            </p>
-                                        </div>
-                                    </div>
+                                <div className="min-w-0">
+                                    <p className="text-[10px] font-semibold tracking-[0.18em] text-teal-700 uppercase">{t('dashboard.route_guidance')}</p>
+                                    <p className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{guidedRoute.name}</p>
+                                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                                        {guidanceMetrics ? formatDistanceMeters(guidanceMetrics.offCourseMeters) : '--'} •{' '}
+                                        {guidanceMetrics ? formatBearing(guidanceMetrics.rejoinBearing) : '--'}
+                                    </p>
                                 </div>
+
+                                <Button type="button" variant="outline" className="h-8 rounded-full px-3 text-xs" onClick={stopRouteGuidance}>
+                                    {t('dashboard.stop_guidance')}
+                                </Button>
+                            </div>
+                        </div>
+                    ) : null}
+
+                    {isRecordingRoute ? (
+                        <div className="pointer-events-none absolute right-3 bottom-44 z-[505] md:hidden">
+                            <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/70 bg-white/92 px-3 py-2 text-xs font-semibold text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/92 dark:text-slate-100">
+                                <span className="inline-flex size-2.5 animate-pulse rounded-full bg-rose-500" />
+                                <span>{activeRoutePoints.length} pts</span>
+                                <Button type="button" variant="outline" className="h-7 rounded-full px-2 text-[11px]" onClick={stopRouteRecording}>
+                                    {t('dashboard.stop_recording')}
+                                </Button>
                             </div>
                         </div>
                     ) : null}
@@ -1213,6 +1324,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                             variant="secondary"
                             className="h-11 w-11 rounded-full shadow-lg md:h-12 md:w-12"
                             onClick={() => {
+                                setFollowPausedByUser(false);
                                 if (displayTrackedPosition) {
                                     setRecenterSignal(Date.now());
                                 } else {
@@ -1934,4 +2046,60 @@ function formatBearing(bearing: number) {
     const cardinal = cardinals[Math.round(normalized / 45) % 8];
 
     return `${Math.round(normalized)}° ${cardinal}`;
+}
+
+function normalizeDegrees(value: number) {
+    return ((value % 360) + 360) % 360;
+}
+
+function interpolateCircularDegrees(from: number, to: number, factor: number) {
+    const shortestDiff = shortestCircularDiff(from, to);
+
+    return normalizeDegrees(from + shortestDiff * factor);
+}
+
+function shortestCircularDiff(from: number, to: number) {
+    return ((to - from + 540) % 360) - 180;
+}
+
+function limitCircularStep(from: number, to: number, maxStepDegrees: number) {
+    const diff = shortestCircularDiff(from, to);
+    const clamped = Math.max(-maxStepDegrees, Math.min(maxStepDegrees, diff));
+
+    return normalizeDegrees(from + clamped);
+}
+
+function extractDeviceHeading(event: DeviceOrientationEvent) {
+    const iosHeading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
+
+    if (typeof iosHeading === 'number' && Number.isFinite(iosHeading)) {
+        return normalizeDegrees(iosHeading);
+    }
+
+    if (typeof event.alpha !== 'number' || !Number.isFinite(event.alpha)) {
+        return null;
+    }
+
+    const rawHeading = 360 - event.alpha;
+    const windowWithOrientation = window as Window & { orientation?: number };
+    const screenAngle = typeof window.screen.orientation?.angle === 'number' ? window.screen.orientation.angle : typeof windowWithOrientation.orientation === 'number' ? windowWithOrientation.orientation : 0;
+
+    return normalizeDegrees(rawHeading + screenAngle);
+}
+
+async function requestDeviceHeadingPermission() {
+    const withPermission = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+        requestPermission?: () => Promise<'granted' | 'denied'>;
+    };
+
+    if (typeof withPermission.requestPermission !== 'function') {
+        return true;
+    }
+
+    try {
+        const result = await withPermission.requestPermission();
+        return result === 'granted';
+    } catch {
+        return false;
+    }
 }
