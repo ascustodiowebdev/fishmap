@@ -1001,6 +1001,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         onDeleteRoute={openRouteDeleteDialog}
                         onStartRouteGuidance={requestRouteGuidance}
                         canRecordRoutes={canRecordRoutes}
+                        keepTrackingInBackground={isRecordingRoute}
                         activeGuidanceRouteId={guidedRouteId}
                         guidanceNearestPoint={guidanceMetrics?.nearestPoint ?? null}
                         isGuidanceActive={isGuidanceActive}

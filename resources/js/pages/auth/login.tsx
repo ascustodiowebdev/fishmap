@@ -32,8 +32,11 @@ export default function Login({ status, canResetPassword }: LoginProps) {
         password: '',
         remember: false,
     });
-    const googleAuthUrl = Capacitor.isNativePlatform()
-        ? route('auth.google.redirect', { mobile: 1 })
+    const isNativeApp =
+        Capacitor.isNativePlatform() ||
+        (typeof navigator !== 'undefined' && /\b(wv|Capacitor)\b/i.test(navigator.userAgent));
+    const googleAuthUrl = isNativeApp
+        ? `${route('auth.google.redirect')}?mobile=1`
         : route('auth.google.redirect');
 
     const submit: FormEventHandler = (e) => {

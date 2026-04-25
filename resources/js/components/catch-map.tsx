@@ -1,5 +1,6 @@
 import { useTranslator } from '@/lib/i18n';
 import { type CatchLog, type MapBounds, type MapFocusRequest, type NavigationRoute } from '@/types';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -31,6 +32,7 @@ interface CatchMapProps {
     onDeleteRoute: (route: NavigationRoute) => void;
     onStartRouteGuidance: (route: NavigationRoute) => void;
     canRecordRoutes: boolean;
+    keepTrackingInBackground: boolean;
     activeGuidanceRouteId: number | null;
     guidanceNearestPoint: [number, number] | null;
     isGuidanceActive: boolean;
@@ -70,6 +72,7 @@ export function CatchMap({
     onDeleteRoute,
     onStartRouteGuidance,
     canRecordRoutes,
+    keepTrackingInBackground,
     activeGuidanceRouteId,
     guidanceNearestPoint,
     isGuidanceActive,
@@ -97,8 +100,29 @@ export function CatchMap({
         let webWatchId: number | null = null;
         let nativeWatchId: string | null = null;
         let cancelled = false;
+        let isAppActive = true;
+
+        const shouldTrack = () => !cancelled && (isAppActive || keepTrackingInBackground);
+
+        const clearTracking = () => {
+            if (webWatchId !== null) {
+                navigator.geolocation.clearWatch(webWatchId);
+                webWatchId = null;
+            }
+
+            if (nativeWatchId) {
+                void Geolocation.clearWatch({ id: nativeWatchId });
+                nativeWatchId = null;
+            }
+
+            onCurrentSpeedChange(null);
+        };
 
         const applyPosition = (coords: PositionCoordsLike) => {
+            if (!shouldTrack()) {
+                return;
+            }
+
             const nextPosition: [number, number] = [coords.latitude, coords.longitude];
             setCurrentPosition(nextPosition);
             setLocationAccuracy(Math.round(coords.accuracy));
@@ -115,6 +139,10 @@ export function CatchMap({
         };
 
         const startWebTracking = () => {
+            if (!shouldTrack()) {
+                return;
+            }
+
             if (!('geolocation' in navigator)) {
                 onCurrentPositionChange(null);
                 onCurrentSpeedChange(null);
@@ -159,6 +187,10 @@ export function CatchMap({
         };
 
         const startNativeTracking = async () => {
+            if (!shouldTrack()) {
+                return;
+            }
+
             try {
                 const permission = await Geolocation.requestPermissions();
 
@@ -185,36 +217,61 @@ export function CatchMap({
                         maximumAge: 3000,
                     },
                     (position) => {
-                        if (cancelled || !position) {
+                        if (!shouldTrack() || !position) {
                             return;
                         }
 
                         applyPosition(position.coords);
                     },
                 );
+
+                if (!shouldTrack() && nativeWatchId) {
+                    void Geolocation.clearWatch({ id: nativeWatchId });
+                    nativeWatchId = null;
+                }
             } catch {
                 startWebTracking();
             }
         };
 
-        if (Capacitor.isNativePlatform()) {
-            void startNativeTracking();
-        } else {
-            startWebTracking();
-        }
+        const startTracking = () => {
+            clearTracking();
+
+            if (!shouldTrack()) {
+                return;
+            }
+
+            if (Capacitor.isNativePlatform()) {
+                void startNativeTracking();
+            } else {
+                startWebTracking();
+            }
+        };
+
+        startTracking();
+
+        const appStateListenerPromise = Capacitor.isNativePlatform()
+            ? CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+                  isAppActive = isActive;
+
+                  if (!isAppActive && !keepTrackingInBackground) {
+                      clearTracking();
+                      return;
+                  }
+
+                  startTracking();
+              })
+            : null;
 
         return () => {
             cancelled = true;
+            clearTracking();
 
-            if (webWatchId !== null) {
-                navigator.geolocation.clearWatch(webWatchId);
-            }
-
-            if (nativeWatchId) {
-                void Geolocation.clearWatch({ id: nativeWatchId });
+            if (appStateListenerPromise) {
+                void appStateListenerPromise.then((listener) => listener.remove());
             }
         };
-    }, [isGuidanceActive, onCurrentPositionChange, onCurrentSpeedChange]);
+    }, [isGuidanceActive, keepTrackingInBackground, onCurrentPositionChange, onCurrentSpeedChange]);
 
     useEffect(() => {
         return () => {
