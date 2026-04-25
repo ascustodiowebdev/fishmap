@@ -8,7 +8,7 @@ import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Route as RouteIcon, Waves, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Waves, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -559,6 +559,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             focusNavigationRoute(navigationRoute);
             setPendingGuidanceRoute(null);
             setGuidanceConfirmOpen(false);
+            setLibraryDialogOpen(false);
+            setLibraryDialogMode(null);
+            setMobileHudOpen(false);
+            setDialogOpen(false);
+            setRouteDialogOpen(false);
         },
         [focusNavigationRoute],
     );
@@ -1118,64 +1123,25 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                     </div>
 
                     {guidedRoute ? (
-                        <div className="pointer-events-none absolute inset-x-4 bottom-28 z-[515] md:right-5 md:bottom-24 md:left-auto md:w-[340px]">
-                            <div className="pointer-events-auto rounded-[1.5rem] border border-white/70 bg-white/92 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <p className="text-xs font-semibold tracking-[0.18em] text-teal-700 uppercase">{t('dashboard.route_guidance')}</p>
-                                        <h3 className="mt-1 text-lg font-semibold text-slate-950 dark:text-slate-50">{guidedRoute.name}</h3>
-                                    </div>
-                                    <Button type="button" variant="outline" className="rounded-full" onClick={stopRouteGuidance}>
-                                        {t('dashboard.stop_guidance')}
-                                    </Button>
+                        <div className="pointer-events-none absolute inset-x-4 bottom-28 z-[515] md:inset-x-auto md:right-5 md:bottom-24">
+                            <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/70 bg-white/92 px-3 py-2 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
+                                <div className="relative flex size-11 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
+                                    <div className="absolute inset-1 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
+                                    <ArrowUp className="size-5 transition-transform duration-200" style={{ transform: `rotate(${guidanceArrowRotation}deg)` }} />
                                 </div>
 
-                                <div className="mt-4 grid gap-4">
-                                    <div className="flex items-center gap-4">
-                                        <div className="relative flex size-20 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
-                                            <div className="absolute inset-2 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
-                                            {guidancePosition ? (
-                                                <ArrowUp
-                                                    className="size-9 transition-transform duration-200"
-                                                    style={{ transform: `rotate(${guidanceArrowRotation}deg)` }}
-                                                />
-                                            ) : (
-                                                <RouteIcon className="size-9" />
-                                            )}
-                                        </div>
-
-                                        <div className="min-w-0 flex-1">
-                                            <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">
-                                                {!guidancePosition
-                                                    ? t('dashboard.guidance_waiting_position')
-                                                    : guidanceMetrics?.onCourse
-                                                      ? t('dashboard.guidance_stay_on_course')
-                                                      : t('dashboard.guidance_rejoin_line')}
-                                            </p>
-                                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                                {!guidancePosition || !guidanceMetrics
-                                                    ? t('dashboard.guidance_waiting_position_copy')
-                                                    : t('dashboard.guidance_metrics', {
-                                                          distance: formatDistanceMeters(guidanceMetrics.offCourseMeters),
-                                                          bearing: formatBearing(guidanceMetrics.rejoinBearing),
-                                                      })}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/70">
-                                            <p className="text-[10px] font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">{t('dashboard.speed')}</p>
-                                            <p className="mt-1 text-base font-semibold text-slate-950 dark:text-slate-50">{formatSpeedKmh(displayedSpeedKmh)}</p>
-                                        </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/70">
-                                            <p className="text-[10px] font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">{t('dashboard.off_line_short')}</p>
-                                            <p className="mt-1 text-base font-semibold text-slate-950 dark:text-slate-50">
-                                                {guidanceMetrics ? formatDistanceMeters(guidanceMetrics.offCourseMeters) : '--'}
-                                            </p>
-                                        </div>
-                                    </div>
+                                <div className="min-w-0">
+                                    <p className="text-[10px] font-semibold tracking-[0.18em] text-teal-700 uppercase">{t('dashboard.route_guidance')}</p>
+                                    <p className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{guidedRoute.name}</p>
+                                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                                        {guidanceMetrics ? formatDistanceMeters(guidanceMetrics.offCourseMeters) : '--'} •{' '}
+                                        {guidanceMetrics ? formatBearing(guidanceMetrics.rejoinBearing) : '--'}
+                                    </p>
                                 </div>
+
+                                <Button type="button" variant="outline" className="h-8 rounded-full px-3 text-xs" onClick={stopRouteGuidance}>
+                                    {t('dashboard.stop_guidance')}
+                                </Button>
                             </div>
                         </div>
                     ) : null}

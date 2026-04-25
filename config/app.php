@@ -54,6 +54,8 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
+    'mobile_deep_link_scheme' => env('MOBILE_DEEP_LINK_SCHEME', 'com.ascustodiowebdev.fishmap'),
+
     /*
     |--------------------------------------------------------------------------
     | Application Timezone
