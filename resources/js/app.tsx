@@ -24,7 +24,11 @@ createInertiaApp({
 
         function MobileAuthBridge() {
             useEffect(() => {
-                if (!Capacitor.isNativePlatform()) {
+                const isNativeApp =
+                    Capacitor.isNativePlatform() ||
+                    (typeof navigator !== 'undefined' && /\b(wv|Capacitor)\b/i.test(navigator.userAgent));
+
+                if (!isNativeApp) {
                     return;
                 }
 
@@ -32,7 +36,17 @@ createInertiaApp({
                     try {
                         const url = new URL(rawUrl);
 
-                        if (url.protocol !== 'com.ascustodiowebdev.fishmap:' || url.hostname !== 'auth' || url.pathname !== '/google') {
+                        if (url.protocol !== 'com.ascustodiowebdev.fishmap:') {
+                            return;
+                        }
+
+                        const host = url.hostname.toLowerCase();
+                        const path = url.pathname.replace(/\/+$/, '');
+                        const isGoogleCallback =
+                            (host === 'auth' && (path === '/google' || path === '')) ||
+                            (host === 'google' && (path === '' || path === '/'));
+
+                        if (!isGoogleCallback) {
                             return;
                         }
 
@@ -42,7 +56,17 @@ createInertiaApp({
                             return;
                         }
 
-                        window.location.assign(`/auth/google/mobile-consume?token=${encodeURIComponent(token)}`);
+                        const storageKey = 'fishmap_mobile_auth_token';
+                        const consumedToken = window.sessionStorage.getItem(storageKey);
+
+                        if (consumedToken === token) {
+                            return;
+                        }
+
+                        window.sessionStorage.setItem(storageKey, token);
+
+                        const consumeUrl = `/auth/google/mobile-consume?token=${encodeURIComponent(token)}`;
+                        window.location.assign(consumeUrl);
                     } catch {
                         // Ignore malformed deep-links.
                     }

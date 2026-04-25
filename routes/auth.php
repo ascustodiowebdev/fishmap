@@ -22,15 +22,6 @@ Route::middleware('guest')->group(function () {
 
     Route::post('login', [AuthenticatedSessionController::class, 'store']);
 
-    Route::get('auth/google/redirect', [GoogleAuthController::class, 'redirect'])
-        ->name('auth.google.redirect');
-
-    Route::get('auth/google/callback', [GoogleAuthController::class, 'callback'])
-        ->name('auth.google.callback');
-
-    Route::get('auth/google/mobile-consume', [GoogleAuthController::class, 'consumeMobileToken'])
-        ->name('auth.google.mobile.consume');
-
     Route::get('forgot-password', [PasswordResetLinkController::class, 'create'])
         ->name('password.request');
 
@@ -64,3 +55,15 @@ Route::middleware('auth')->group(function () {
     Route::post('logout', [AuthenticatedSessionController::class, 'destroy'])
         ->name('logout');
 });
+
+Route::get('auth/google/mobile-return', [GoogleAuthController::class, 'mobileReturn'])
+    ->name('auth.google.mobile.return');
+
+Route::get('auth/google/redirect', [GoogleAuthController::class, 'redirect'])
+    ->name('auth.google.redirect');
+
+Route::get('auth/google/callback', [GoogleAuthController::class, 'callback'])
+    ->name('auth.google.callback');
+
+Route::get('auth/google/mobile-consume', [GoogleAuthController::class, 'consumeMobileToken'])
+    ->name('auth.google.mobile.consume');
