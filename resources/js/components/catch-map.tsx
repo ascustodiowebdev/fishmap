@@ -49,6 +49,10 @@ type PositionCoordsLike = {
     speed?: number | null;
 };
 
+const SPEED_NOISE_FLOOR_KMH = 1.8;
+const MIN_MOVEMENT_FOR_SPEED_METERS = 2;
+const MAX_ACCURACY_FOR_SPEED_METERS = 25;
+
 export function CatchMap({
     catchLogs,
     navigationRoutes,
@@ -86,6 +90,17 @@ export function CatchMap({
     const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
     const hasAutoCenteredRef = useRef(false);
     const loadDelayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const currentPositionHandlerRef = useRef(onCurrentPositionChange);
+    const currentSpeedHandlerRef = useRef(onCurrentSpeedChange);
+    const lastSpeedSampleRef = useRef<{ position: [number, number]; timestamp: number } | null>(null);
+
+    useEffect(() => {
+        currentPositionHandlerRef.current = onCurrentPositionChange;
+    }, [onCurrentPositionChange]);
+
+    useEffect(() => {
+        currentSpeedHandlerRef.current = onCurrentSpeedChange;
+    }, [onCurrentSpeedChange]);
 
     const catchPoints = catchLogs
         .filter((catchLog) => catchLog.latitude && catchLog.longitude)
@@ -115,7 +130,7 @@ export function CatchMap({
                 nativeWatchId = null;
             }
 
-            onCurrentSpeedChange(null);
+            currentSpeedHandlerRef.current(null);
         };
 
         const applyPosition = (coords: PositionCoordsLike) => {
@@ -124,10 +139,34 @@ export function CatchMap({
             }
 
             const nextPosition: [number, number] = [coords.latitude, coords.longitude];
+            const timestamp = Date.now();
+            let derivedSpeedKmh: number | null = null;
+            const previousSpeedSample = lastSpeedSampleRef.current;
+
+            if (previousSpeedSample) {
+                const elapsedMilliseconds = timestamp - previousSpeedSample.timestamp;
+
+                if (elapsedMilliseconds > 0) {
+                    const distanceMeters = calculateDistanceMeters(previousSpeedSample.position, nextPosition);
+                    if (distanceMeters < MIN_MOVEMENT_FOR_SPEED_METERS || coords.accuracy > MAX_ACCURACY_FOR_SPEED_METERS) {
+                        derivedSpeedKmh = 0;
+                    } else {
+                        derivedSpeedKmh = (distanceMeters / elapsedMilliseconds) * 3600;
+                    }
+                }
+            }
+
+            lastSpeedSampleRef.current = { position: nextPosition, timestamp };
             setCurrentPosition(nextPosition);
             setLocationAccuracy(Math.round(coords.accuracy));
-            onCurrentPositionChange(nextPosition);
-            onCurrentSpeedChange(typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? Math.max(coords.speed * 3.6, 0) : null);
+            currentPositionHandlerRef.current(nextPosition);
+
+            const nativeSpeedKmh =
+                typeof coords.speed === 'number' && Number.isFinite(coords.speed) && coords.speed > 0.15 ? Math.max(coords.speed * 3.6, 0) : null;
+            const rawSpeedKmh = nativeSpeedKmh ?? derivedSpeedKmh;
+            const smoothedSpeedKmh =
+                rawSpeedKmh !== null && (rawSpeedKmh < SPEED_NOISE_FLOOR_KMH || coords.accuracy > MAX_ACCURACY_FOR_SPEED_METERS) ? 0 : rawSpeedKmh;
+            currentSpeedHandlerRef.current(smoothedSpeedKmh);
 
             if (!hasAutoCenteredRef.current) {
                 hasAutoCenteredRef.current = true;
@@ -144,14 +183,14 @@ export function CatchMap({
             }
 
             if (!('geolocation' in navigator)) {
-                onCurrentPositionChange(null);
-                onCurrentSpeedChange(null);
+                currentPositionHandlerRef.current(null);
+                currentSpeedHandlerRef.current(null);
                 return;
             }
 
             if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                onCurrentPositionChange(null);
-                onCurrentSpeedChange(null);
+                currentPositionHandlerRef.current(null);
+                currentSpeedHandlerRef.current(null);
                 return;
             }
 
@@ -195,8 +234,8 @@ export function CatchMap({
                 const permission = await Geolocation.requestPermissions();
 
                 if (permission.location !== 'granted' && permission.coarseLocation !== 'granted') {
-                    onCurrentPositionChange(null);
-                    onCurrentSpeedChange(null);
+                    currentPositionHandlerRef.current(null);
+                    currentSpeedHandlerRef.current(null);
                     return;
                 }
 
@@ -254,8 +293,10 @@ export function CatchMap({
             ? CapacitorApp.addListener('appStateChange', ({ isActive }) => {
                   isAppActive = isActive;
 
-                  if (!isAppActive && !keepTrackingInBackground) {
-                      clearTracking();
+                  if (!isAppActive) {
+                      if (!keepTrackingInBackground) {
+                          clearTracking();
+                      }
                       return;
                   }
 
@@ -266,12 +307,13 @@ export function CatchMap({
         return () => {
             cancelled = true;
             clearTracking();
+            lastSpeedSampleRef.current = null;
 
             if (appStateListenerPromise) {
                 void appStateListenerPromise.then((listener) => listener.remove());
             }
         };
-    }, [isGuidanceActive, keepTrackingInBackground, onCurrentPositionChange, onCurrentSpeedChange]);
+    }, [isGuidanceActive, keepTrackingInBackground]);
 
     useEffect(() => {
         return () => {
@@ -665,6 +707,21 @@ function createFishPinIcon(isOwner: boolean): Icon {
         popupAnchor: [0, -46],
         className: 'fishmap-catch-pin',
     });
+}
+
+function calculateDistanceMeters(start: [number, number], end: [number, number]) {
+    const earthRadiusMeters = 6371000;
+    const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+    const dLat = toRadians(end[0] - start[0]);
+    const dLng = toRadians(end[1] - start[1]);
+    const lat1 = toRadians(start[0]);
+    const lat2 = toRadians(end[0]);
+
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+
+    return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null }) {

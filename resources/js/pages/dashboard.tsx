@@ -149,7 +149,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const isGuidanceActive = Boolean(guidedRoute);
     const displayedSpeedKmh = simulationEnabled ? currentSpeedKmh : gpsSpeedKmh ?? currentSpeedKmh;
     const shouldAutoFollowPosition =
-        (isRecordingRoute || isGuidanceActive) &&
         !dialogOpen &&
         !routeDialogOpen &&
         !libraryDialogOpen &&
@@ -926,6 +925,28 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         saveFish();
     };
 
+    const handleMapPositionChange = useCallback(
+        (position: [number, number] | null) => {
+            setCurrentTrackedPosition(position);
+
+            if (!routeSimulationEnabled && !selectedPosition && position) {
+                setCoordinates(position);
+            }
+        },
+        [routeSimulationEnabled, selectedPosition, setCoordinates],
+    );
+
+    const handleMapInteractionChange = useCallback(
+        (interacting: boolean) => {
+            setIsMapInteracting(interacting);
+
+            if (interacting) {
+                setFollowPausedByUser(true);
+            }
+        },
+        [],
+    );
+
     const latestTripLabel = stats.latest_trip ? new Date(stats.latest_trip).toLocaleDateString() : t('dashboard.no_trips');
     const fishSpotCount = catchLogs.length.toString();
     const routeCount = navigationRoutes.length.toString();
@@ -978,19 +999,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                 holdOpenTimer.current = null;
                             }, 120);
                         }}
-                        onCurrentPositionChange={(position) => {
-                            setCurrentTrackedPosition(position);
-                            if (!routeSimulationEnabled && !selectedPosition && position) {
-                                setCoordinates(position);
-                            }
-                        }}
+                        onCurrentPositionChange={handleMapPositionChange}
                         onCurrentSpeedChange={setGpsSpeedKmh}
-                        onInteractionChange={(interacting) => {
-                            setIsMapInteracting(interacting);
-                            if (interacting && (isRecordingRoute || isGuidanceActive)) {
-                                setFollowPausedByUser(true);
-                            }
-                        }}
+                        onInteractionChange={handleMapInteractionChange}
                         recenterToCurrentSignal={recenterSignal}
                         externalFocusRequest={mapFocusRequest}
                         onInitialLoadChange={setIsInitialMapLoading}
