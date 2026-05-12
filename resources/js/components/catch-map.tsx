@@ -18,7 +18,7 @@ interface CatchMapProps {
     allowTapSelection: boolean;
     onSelectPosition: (position: [number, number]) => void;
     onClearSelection: () => void;
-    onCurrentPositionChange: (position: [number, number] | null) => void;
+    onCurrentPositionChange: (sample: { position: [number, number]; accuracy: number; recordedAt: string } | null) => void;
     onCurrentSpeedChange: (speedKmh: number | null) => void;
     onInteractionChange: (isInteracting: boolean) => void;
     recenterToCurrentSignal: number;
@@ -40,6 +40,7 @@ interface CatchMapProps {
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
 const satelliteKey = import.meta.env.VITE_MAPTILER_KEY;
+const canUseDepthLayer = Boolean(satelliteKey);
 type BaseLayerMode = 'street' | 'nautical' | 'satellite';
 const layerOrder: BaseLayerMode[] = satelliteKey ? ['street', 'nautical', 'satellite'] : ['street', 'nautical'];
 type PositionCoordsLike = {
@@ -52,6 +53,8 @@ type PositionCoordsLike = {
 const SPEED_NOISE_FLOOR_KMH = 1.8;
 const MIN_MOVEMENT_FOR_SPEED_METERS = 2;
 const MAX_ACCURACY_FOR_SPEED_METERS = 25;
+const MAX_TRACK_SPIKE_SPEED_KMH = 120;
+const MAX_TRACK_SPIKE_DISTANCE_METERS = 120;
 
 export function CatchMap({
     catchLogs,
@@ -87,6 +90,7 @@ export function CatchMap({
     const [showLoadingOverlay, setShowLoadingOverlay] = useState(true);
     const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
     const [baseLayer, setBaseLayer] = useState<BaseLayerMode>('nautical');
+    const [showDepthLayer, setShowDepthLayer] = useState(false);
     const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
     const hasAutoCenteredRef = useRef(false);
     const loadDelayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -142,16 +146,24 @@ export function CatchMap({
             const timestamp = Date.now();
             let derivedSpeedKmh: number | null = null;
             const previousSpeedSample = lastSpeedSampleRef.current;
+            const recordedAt = new Date(timestamp).toISOString();
 
             if (previousSpeedSample) {
                 const elapsedMilliseconds = timestamp - previousSpeedSample.timestamp;
 
                 if (elapsedMilliseconds > 0) {
                     const distanceMeters = calculateDistanceMeters(previousSpeedSample.position, nextPosition);
+                    const nextSpeedKmh = (distanceMeters / elapsedMilliseconds) * 3600;
+                    const isLikelySpike = distanceMeters >= MAX_TRACK_SPIKE_DISTANCE_METERS && nextSpeedKmh >= MAX_TRACK_SPIKE_SPEED_KMH;
+
+                    if (isLikelySpike) {
+                        return;
+                    }
+
                     if (distanceMeters < MIN_MOVEMENT_FOR_SPEED_METERS || coords.accuracy > MAX_ACCURACY_FOR_SPEED_METERS) {
                         derivedSpeedKmh = 0;
                     } else {
-                        derivedSpeedKmh = (distanceMeters / elapsedMilliseconds) * 3600;
+                        derivedSpeedKmh = nextSpeedKmh;
                     }
                 }
             }
@@ -159,7 +171,11 @@ export function CatchMap({
             lastSpeedSampleRef.current = { position: nextPosition, timestamp };
             setCurrentPosition(nextPosition);
             setLocationAccuracy(Math.round(coords.accuracy));
-            currentPositionHandlerRef.current(nextPosition);
+            currentPositionHandlerRef.current({
+                position: nextPosition,
+                accuracy: Math.round(coords.accuracy),
+                recordedAt,
+            });
 
             const nativeSpeedKmh =
                 typeof coords.speed === 'number' && Number.isFinite(coords.speed) && coords.speed > 0.15 ? Math.max(coords.speed * 3.6, 0) : null;
@@ -424,6 +440,16 @@ export function CatchMap({
                         updateWhenZooming
                     />
                 ) : null}
+                {showDepthLayer && canUseDepthLayer ? (
+                    <TileLayer
+                        attribution='&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a>'
+                        url={`https://api.maptiler.com/maps/ocean/{z}/{x}/{y}.png?key=${satelliteKey}`}
+                        opacity={0.75}
+                        keepBuffer={8}
+                        updateWhenIdle={false}
+                        updateWhenZooming
+                    />
+                ) : null}
 
                 {displayedPosition ? (
                     <>
@@ -637,14 +663,26 @@ export function CatchMap({
             ) : null}
 
             <div className="absolute bottom-14 left-3 z-[500] md:bottom-5 md:left-5">
-                <button
-                    type="button"
-                    onClick={cycleLayer}
-                    className="flex items-center gap-2 rounded-full border border-white/15 bg-slate-900/72 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-white shadow-lg backdrop-blur transition md:hidden"
-                >
-                    <Layers3 className="size-4" />
-                    <span className="uppercase">{currentLayerLabel}</span>
-                </button>
+                <div className="flex items-center gap-2 md:hidden">
+                    <button
+                        type="button"
+                        onClick={cycleLayer}
+                        className="flex items-center gap-2 rounded-full border border-white/15 bg-slate-900/72 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-white shadow-lg backdrop-blur transition"
+                    >
+                        <Layers3 className="size-4" />
+                        <span className="uppercase">{currentLayerLabel}</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setShowDepthLayer((value) => !value)}
+                        disabled={!canUseDepthLayer}
+                        className={`rounded-full px-3 py-2 text-[11px] font-semibold tracking-[0.12em] uppercase shadow-lg backdrop-blur transition ${
+                            showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/72 text-white'
+                        }`}
+                    >
+                        {t('dashboard.map_depth')}
+                    </button>
+                </div>
 
                 <div className="hidden gap-2 md:flex">
                     <button
@@ -682,6 +720,16 @@ export function CatchMap({
                             {t('dashboard.map_satellite')}
                         </button>
                     ) : null}
+                    <button
+                        type="button"
+                        onClick={() => setShowDepthLayer((value) => !value)}
+                        disabled={!canUseDepthLayer}
+                        className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                            showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
+                        }`}
+                    >
+                        {t('dashboard.map_depth')}
+                    </button>
                 </div>
             </div>
         </div>

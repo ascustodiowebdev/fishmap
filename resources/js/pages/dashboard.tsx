@@ -8,7 +8,7 @@ import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Plus, Waves, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Navigation, Plus, Waves, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -68,6 +68,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const [routeDialogMode, setRouteDialogMode] = useState<RouteDialogMode>(null);
     const [activeRoute, setActiveRoute] = useState<NavigationRoute | null>(null);
     const [routeSubmitError, setRouteSubmitError] = useState<string | null>(null);
+    const [isSavingRoute, setIsSavingRoute] = useState(false);
     const [mobileHudOpen, setMobileHudOpen] = useState(false);
     const [mapFocusRequest, setMapFocusRequest] = useState<MapFocusRequest | null>(null);
     const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
@@ -82,6 +83,8 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const lastMovementSample = useRef<{ position: [number, number]; timestamp: number } | null>(null);
     const [isMapInteracting, setIsMapInteracting] = useState(false);
     const [followPausedByUser, setFollowPausedByUser] = useState(false);
+    const [isFollowModeActive, setIsFollowModeActive] = useState(false);
+    const [sessionMaxSpeedKmh, setSessionMaxSpeedKmh] = useState<number>(0);
 
     const form = useForm({
         species: '',
@@ -149,13 +152,14 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const isGuidanceActive = Boolean(guidedRoute);
     const displayedSpeedKmh = simulationEnabled ? currentSpeedKmh : gpsSpeedKmh ?? currentSpeedKmh;
     const shouldAutoFollowPosition =
-        !dialogOpen &&
-        !routeDialogOpen &&
-        !libraryDialogOpen &&
-        !guidanceConfirmOpen &&
-        !mobileHudOpen &&
-        !isMapInteracting &&
-        !followPausedByUser;
+        isFollowModeActive ||
+        (!dialogOpen &&
+            !routeDialogOpen &&
+            !libraryDialogOpen &&
+            !guidanceConfirmOpen &&
+            !mobileHudOpen &&
+            !isMapInteracting &&
+            !followPausedByUser);
     const guidanceArrowRotation = useMemo(() => {
         if (!guidanceMetrics) {
             return 0;
@@ -224,6 +228,17 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             setFollowPausedByUser(false);
         }
     }, [isGuidanceActive, isRecordingRoute]);
+
+    useEffect(() => {
+        if (!isFollowModeActive) {
+            return;
+        }
+
+        const speed = displayedSpeedKmh ?? 0;
+        if (speed > sessionMaxSpeedKmh) {
+            setSessionMaxSpeedKmh(speed);
+        }
+    }, [displayedSpeedKmh, isFollowModeActive, sessionMaxSpeedKmh]);
 
     useEffect(() => {
         if (!shouldAutoFollowPosition || !displayTrackedPosition) {
@@ -318,35 +333,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         },
         [recordingVisibility, routeForm],
     );
-
-    useEffect(() => {
-        if (!isRecordingRoute) {
-            return;
-        }
-
-        const intervalId = window.setInterval(() => {
-            const now = new Date();
-
-            if (simulationEnabled) {
-                return;
-            }
-
-            if (!currentTrackedPosition) {
-                return;
-            }
-
-            setActiveRoutePoints((current) => [
-                ...current,
-                {
-                    latitude: currentTrackedPosition[0],
-                    longitude: currentTrackedPosition[1],
-                    recorded_at: now.toISOString(),
-                },
-            ]);
-        }, 1000);
-
-        return () => window.clearInterval(intervalId);
-    }, [currentTrackedPosition, isRecordingRoute, simulationEnabled]);
 
     const populateForm = useCallback(
         (catchLog?: CatchLog | null) => {
@@ -676,19 +662,25 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         if (!canRecordRoutes) {
             return;
         }
+        if (isSavingRoute) {
+            return;
+        }
 
         setRouteSubmitError(null);
+        setIsSavingRoute(true);
 
         const startedAt = buildCaughtAtIso(routeForm.data.started_date, routeForm.data.started_time);
         const endedAt = buildCaughtAtIso(routeForm.data.ended_date, routeForm.data.ended_time);
 
         if (!startedAt || !endedAt) {
             setRouteSubmitError('Please use a valid date and time format: DD MM YYYY and 24h HH:mm.');
+            setIsSavingRoute(false);
             return;
         }
 
         if (new Date(endedAt).getTime() < new Date(startedAt).getTime()) {
             setRouteSubmitError('The route end time cannot be earlier than the start time.');
+            setIsSavingRoute(false);
             return;
         }
 
@@ -703,6 +695,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             router.put(route('navigation-routes.update', activeRoute.id), payload, {
                 preserveScroll: true,
                 onError: (errors) => {
+                    setIsSavingRoute(false);
                     setRouteSubmitError(
                         errors.name ??
                             errors.visibility ??
@@ -712,6 +705,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                     );
                 },
                 onSuccess: () => {
+                    setIsSavingRoute(false);
                     setRouteDialogOpen(false);
                     setRouteDialogMode(null);
                     setActiveRoute(null);
@@ -722,6 +716,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
 
         if (activeRoutePoints.length < 2) {
             setRouteSubmitError('A route needs at least two points before it can be saved.');
+            setIsSavingRoute(false);
             return;
         }
 
@@ -734,6 +729,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             {
                 preserveScroll: true,
                 onError: (errors) => {
+                    setIsSavingRoute(false);
                     setRouteSubmitError(
                         errors.name ??
                             errors.visibility ??
@@ -744,12 +740,13 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                     );
                 },
                 onSuccess: () => {
+                    setIsSavingRoute(false);
                     setRouteDialogOpen(false);
                     resetRouteDraft();
                 },
             },
         );
-    }, [activeRoute, activeRoutePoints, canRecordRoutes, resetRouteDraft, routeDialogMode, routeForm.data.ended_date, routeForm.data.ended_time, routeForm.data.name, routeForm.data.started_date, routeForm.data.started_time, routeForm.data.visibility]);
+    }, [activeRoute, activeRoutePoints, canRecordRoutes, isSavingRoute, resetRouteDraft, routeDialogMode, routeForm.data.ended_date, routeForm.data.ended_time, routeForm.data.name, routeForm.data.started_date, routeForm.data.started_time, routeForm.data.visibility]);
 
     const deleteRoute = useCallback(() => {
         if (!canRecordRoutes) {
@@ -782,12 +779,26 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         setMapPickMode(true);
     }, []);
 
-    const appendRoutePoint = useCallback((position: [number, number]) => {
+    const appendRoutePoint = useCallback((position: [number, number], recordedAt?: string, accuracy?: number) => {
         setActiveRoutePoints((currentPoints) => {
             const latestPoint = currentPoints.at(-1);
+            const nextRecordedAt = recordedAt ?? new Date().toISOString();
 
             if (latestPoint && Math.abs(latestPoint.latitude - position[0]) < 0.0000001 && Math.abs(latestPoint.longitude - position[1]) < 0.0000001) {
                 return currentPoints;
+            }
+
+            if (latestPoint) {
+                const elapsedMilliseconds = Math.max(new Date(nextRecordedAt).getTime() - new Date(latestPoint.recorded_at).getTime(), 1);
+                const distanceMeters = calculateDistanceMeters([latestPoint.latitude, latestPoint.longitude], position);
+                const speedKmh = (distanceMeters / elapsedMilliseconds) * 3600;
+                const isLikelySpike = speedKmh > 120 || (distanceMeters > 120 && elapsedMilliseconds < 4000);
+                const isLikelyNoise = distanceMeters < 4 && elapsedMilliseconds < 5000;
+                const accuracyTooWeakForMove = typeof accuracy === 'number' && accuracy > 60 && distanceMeters > 20;
+
+                if (isLikelySpike || isLikelyNoise || accuracyTooWeakForMove) {
+                    return currentPoints;
+                }
             }
 
             return [
@@ -795,7 +806,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 {
                     latitude: position[0],
                     longitude: position[1],
-                    recorded_at: new Date().toISOString(),
+                    recorded_at: nextRecordedAt,
                 },
             ];
         });
@@ -926,14 +937,19 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     };
 
     const handleMapPositionChange = useCallback(
-        (position: [number, number] | null) => {
+        (sample: { position: [number, number]; accuracy: number; recordedAt: string } | null) => {
+            const position = sample?.position ?? null;
             setCurrentTrackedPosition(position);
 
-            if (!routeSimulationEnabled && !selectedPosition && position) {
-                setCoordinates(position);
+            if (isRecordingRoute && !routeSimulationEnabled && sample) {
+                appendRoutePoint(sample.position, sample.recordedAt, sample.accuracy);
+            }
+
+            if (!routeSimulationEnabled && !selectedPosition && sample) {
+                setCoordinates(sample.position);
             }
         },
-        [routeSimulationEnabled, selectedPosition, setCoordinates],
+        [appendRoutePoint, isRecordingRoute, routeSimulationEnabled, selectedPosition, setCoordinates],
     );
 
     const handleMapInteractionChange = useCallback(
@@ -946,6 +962,24 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         },
         [],
     );
+
+    const toggleFollowMode = useCallback(() => {
+        setIsFollowModeActive((current) => {
+            const next = !current;
+
+            if (next) {
+                setSessionMaxSpeedKmh(0);
+                setFollowPausedByUser(false);
+                if (displayTrackedPosition) {
+                    setRecenterSignal(Date.now());
+                } else {
+                    void fetchCurrentPositionForCatch();
+                }
+            }
+
+            return next;
+        });
+    }, [displayTrackedPosition, fetchCurrentPositionForCatch]);
 
     const latestTripLabel = stats.latest_trip ? new Date(stats.latest_trip).toLocaleDateString() : t('dashboard.no_trips');
     const fishSpotCount = catchLogs.length.toString();
@@ -1173,6 +1207,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                     <div className="pointer-events-none absolute bottom-28 left-3 z-[500] md:bottom-20 md:left-5">
                         <div className="pointer-events-auto rounded-full border border-white/70 bg-white/90 px-3 py-2 text-xs font-semibold text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 dark:text-slate-100">
                             {t('dashboard.speed')}: {formatSpeedKmh(displayedSpeedKmh)}
+                            {isFollowModeActive ? `  |  ${t('dashboard.max_speed')}: ${formatSpeedKmh(sessionMaxSpeedKmh)}` : ''}
                         </div>
                     </div>
 
@@ -1330,6 +1365,17 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                     </Dialog>
 
                     <div className="absolute right-3 bottom-14 z-[500] flex flex-col items-end gap-2 md:right-5 md:bottom-5 md:gap-3">
+                        <Button
+                            type="button"
+                            size="icon"
+                            variant={isFollowModeActive ? 'default' : 'secondary'}
+                            className={`h-11 w-11 rounded-full shadow-lg md:h-12 md:w-12 ${isFollowModeActive ? 'bg-teal-700 text-white hover:bg-teal-600' : ''}`}
+                            onClick={toggleFollowMode}
+                            title={isFollowModeActive ? t('dashboard.follow_mode_on') : t('dashboard.follow_mode_off')}
+                        >
+                            <Navigation className="size-5" />
+                        </Button>
+
                         <Button
                             type="button"
                             size="icon"
@@ -1800,8 +1846,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                                 >
                                                     {t('common.cancel')}
                                                 </Button>
-                                                <Button type="button" onClick={saveRoute}>
-                                                    {routeDialogMode === 'create' ? t('dashboard.save_route_button') : t('dashboard.save_changes')}
+                                                <Button type="button" onClick={saveRoute} disabled={isSavingRoute}>
+                                                    {isSavingRoute
+                                                        ? t('common.saving')
+                                                        : routeDialogMode === 'create'
+                                                          ? t('dashboard.save_route_button')
+                                                          : t('dashboard.save_changes')}
                                                 </Button>
                                             </div>
                                         </div>
