@@ -8,7 +8,7 @@ import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Navigation, Plus, Waves, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Navigation, Plus, Waves, Wind, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -30,6 +30,23 @@ interface RouteGuidanceMetrics {
     offCourseMeters: number;
     rejoinBearing: number;
     onCourse: boolean;
+}
+
+interface MarineConditionsPayload {
+    wind: {
+        speed_kmh: number | null;
+        gust_kmh: number | null;
+        direction_deg: number | null;
+    };
+    tide: {
+        state: 'rising' | 'falling' | 'slack' | null;
+        next_high_at: string | null;
+        next_low_at: string | null;
+        next_high_m: number | null;
+        next_low_m: number | null;
+        coefficient: number | null;
+        level_msl_m: number | null;
+    };
 }
 
 const inputClassName =
@@ -85,6 +102,10 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const [followPausedByUser, setFollowPausedByUser] = useState(false);
     const [isFollowModeActive, setIsFollowModeActive] = useState(false);
     const [sessionMaxSpeedKmh, setSessionMaxSpeedKmh] = useState<number>(0);
+    const [marineConditions, setMarineConditions] = useState<MarineConditionsPayload | null>(null);
+    const [marineConditionsError, setMarineConditionsError] = useState<string | null>(null);
+    const [marineConditionsLoading, setMarineConditionsLoading] = useState(false);
+    const lastMarineFetchRef = useRef<{ latitude: number; longitude: number; fetchedAt: number } | null>(null);
 
     const form = useForm({
         species: '',
@@ -256,6 +277,61 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             setSimulatedPosition(null);
         }
     }, [isRecordingRoute, simulationEnabled]);
+
+    useEffect(() => {
+        if (!displayTrackedPosition || simulationEnabled) {
+            return;
+        }
+
+        const [latitude, longitude] = displayTrackedPosition;
+        const previous = lastMarineFetchRef.current;
+        const now = Date.now();
+
+        if (previous) {
+            const movedMeters = calculateDistanceMeters([previous.latitude, previous.longitude], [latitude, longitude]);
+            const withinTimeWindow = now - previous.fetchedAt < 12 * 60 * 1000;
+
+            if (movedMeters < 450 && withinTimeWindow) {
+                return;
+            }
+        }
+
+        const controller = new AbortController();
+        setMarineConditionsLoading(true);
+        setMarineConditionsError(null);
+
+        const url = `${route('marine-conditions')}?latitude=${latitude}&longitude=${longitude}`;
+        fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } })
+            .then(async (response) => {
+                if (!response.ok) {
+                    throw new Error(`Marine conditions request failed: ${response.status}`);
+                }
+
+                return (await response.json()) as MarineConditionsPayload;
+            })
+            .then((payload) => {
+                setMarineConditions(payload);
+                lastMarineFetchRef.current = {
+                    latitude,
+                    longitude,
+                    fetchedAt: Date.now(),
+                };
+            })
+            .catch((error: unknown) => {
+                if (error instanceof DOMException && error.name === 'AbortError') {
+                    return;
+                }
+
+                setMarineConditionsError(t('common.error'));
+            })
+            .finally(() => {
+                setMarineConditionsLoading(false);
+            });
+
+        return () => {
+            controller.abort();
+        };
+    }, [displayTrackedPosition, simulationEnabled, t]);
 
     useEffect(() => {
         if (guidedRouteId && !guidedRoute) {
@@ -1158,6 +1234,55 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                     )}
                                 </div>
                             </div>
+                            ) : null}
+
+                            {canRecordRoutes ? (
+                                <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-950">{t('dashboard.marine_conditions')}</p>
+                                            <p className="mt-1 text-xs text-slate-600">{t('dashboard.marine_conditions_copy')}</p>
+                                        </div>
+                                        <Wind className="mt-0.5 size-4 text-cyan-700" />
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                            <p className="font-medium text-slate-500">{t('dashboard.wind')}</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                {formatWindLabel(marineConditions?.wind.speed_kmh, marineConditions?.wind.direction_deg)}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                            <p className="font-medium text-slate-500">{t('dashboard.wind_gust')}</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatSpeedKmh(marineConditions?.wind.gust_kmh ?? null)}</p>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                            <p className="font-medium text-slate-500">{t('dashboard.next_high_tide')}</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                {formatTideTimeAndHeight(marineConditions?.tide.next_high_at, marineConditions?.tide.next_high_m)}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                            <p className="font-medium text-slate-500">{t('dashboard.next_low_tide')}</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                {formatTideTimeAndHeight(marineConditions?.tide.next_low_at, marineConditions?.tide.next_low_m)}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                                        <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-medium text-cyan-900">
+                                            {t('dashboard.tide_state')}: {formatTideState(marineConditions?.tide.state, t)}
+                                        </span>
+                                        <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-900">
+                                            {t('dashboard.tide_coefficient')}: {marineConditions?.tide.coefficient ?? '--'}
+                                        </span>
+                                    </div>
+
+                                    {marineConditionsLoading ? <p className="mt-3 text-[11px] text-slate-500">{t('dashboard.loading_marine_conditions')}</p> : null}
+                                    {marineConditionsError ? <p className="mt-3 text-[11px] text-amber-700">{marineConditionsError}</p> : null}
+                                </div>
                             ) : null}
 
                             {mapPickMode ? (
@@ -2147,6 +2272,50 @@ function extractDeviceHeading(event: DeviceOrientationEvent) {
     const screenAngle = typeof window.screen.orientation?.angle === 'number' ? window.screen.orientation.angle : typeof windowWithOrientation.orientation === 'number' ? windowWithOrientation.orientation : 0;
 
     return normalizeDegrees(rawHeading + screenAngle);
+}
+
+function formatWindLabel(speedKmh: number | null | undefined, directionDeg: number | null | undefined) {
+    if (speedKmh === null || speedKmh === undefined || !Number.isFinite(speedKmh)) {
+        return '--';
+    }
+
+    if (directionDeg === null || directionDeg === undefined || !Number.isFinite(directionDeg)) {
+        return formatSpeedKmh(speedKmh);
+    }
+
+    return `${formatSpeedKmh(speedKmh)} • ${formatBearing(directionDeg)}`;
+}
+
+function formatTideTimeAndHeight(timeIso: string | null | undefined, heightM: number | null | undefined) {
+    if (!timeIso) {
+        return '--';
+    }
+
+    const parsed = new Date(timeIso);
+    if (Number.isNaN(parsed.getTime())) {
+        return '--';
+    }
+
+    const time = parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const height = heightM !== null && heightM !== undefined && Number.isFinite(heightM) ? ` (${heightM.toFixed(2)} m)` : '';
+
+    return `${time}${height}`;
+}
+
+function formatTideState(state: 'rising' | 'falling' | 'slack' | null | undefined, t: (key: string) => string) {
+    if (!state) {
+        return '--';
+    }
+
+    if (state === 'rising') {
+        return t('dashboard.tide_rising');
+    }
+
+    if (state === 'falling') {
+        return t('dashboard.tide_falling');
+    }
+
+    return t('dashboard.tide_slack');
 }
 
 async function requestDeviceHeadingPermission() {

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\CatchLogController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\MarineConditionsController;
 use App\Http\Controllers\NavigationRouteController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -34,6 +35,7 @@ Route::middleware(['auth', 'maintenance'])->group(function () {
     Route::post('navigation-routes', [NavigationRouteController::class, 'store'])->name('navigation-routes.store');
     Route::put('navigation-routes/{navigationRoute}', [NavigationRouteController::class, 'update'])->name('navigation-routes.update');
     Route::delete('navigation-routes/{navigationRoute}', [NavigationRouteController::class, 'destroy'])->name('navigation-routes.destroy');
+    Route::get('marine-conditions', MarineConditionsController::class)->name('marine-conditions');
 });
 
 Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
