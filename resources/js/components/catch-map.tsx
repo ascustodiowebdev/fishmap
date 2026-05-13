@@ -6,7 +6,7 @@ import { Geolocation } from '@capacitor/geolocation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap, useMapEvents, WMSTileLayer } from 'react-leaflet';
 import { Fish, Layers3 } from 'lucide-react';
 
 interface CatchMapProps {
@@ -40,7 +40,28 @@ interface CatchMapProps {
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
 const satelliteKey = import.meta.env.VITE_MAPTILER_KEY;
-const canUseDepthLayer = Boolean(satelliteKey);
+const emodnetDepthWmsUrl = 'https://ows.emodnet-bathymetry.eu/wms?';
+const emodnetDepthSampleUrl = 'https://rest.emodnet-bathymetry.eu/depth_sample';
+const shallowRiskSld = `<StyledLayerDescriptor version="1.0.0" xmlns="http://www.opengis.net/sld" xmlns:ogc="http://www.opengis.net/ogc" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <NamedLayer>
+    <Name>emodnet:mean_rainbowcolour</Name>
+    <UserStyle>
+      <FeatureTypeStyle>
+        <Rule>
+          <RasterSymbolizer>
+            <ColorMap type="intervals">
+              <ColorMapEntry color="#000000" quantity="0" opacity="0" />
+              <ColorMapEntry color="#111827" quantity="1" opacity="0.9" />
+              <ColorMapEntry color="#7c3aed" quantity="2" opacity="0.78" />
+              <ColorMapEntry color="#06b6d4" quantity="3" opacity="0.68" />
+              <ColorMapEntry color="#000000" quantity="10000" opacity="0" />
+            </ColorMap>
+          </RasterSymbolizer>
+        </Rule>
+      </FeatureTypeStyle>
+    </UserStyle>
+  </NamedLayer>
+</StyledLayerDescriptor>`;
 type BaseLayerMode = 'street' | 'nautical' | 'satellite';
 const layerOrder: BaseLayerMode[] = satelliteKey ? ['street', 'nautical', 'satellite'] : ['street', 'nautical'];
 type PositionCoordsLike = {
@@ -91,9 +112,12 @@ export function CatchMap({
     const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
     const [baseLayer, setBaseLayer] = useState<BaseLayerMode>('nautical');
     const [showDepthLayer, setShowDepthLayer] = useState(false);
+    const [currentDepthMeters, setCurrentDepthMeters] = useState<number | null>(null);
+    const [isDepthLoading, setIsDepthLoading] = useState(false);
     const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
     const hasAutoCenteredRef = useRef(false);
     const loadDelayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const depthAbortControllerRef = useRef<AbortController | null>(null);
     const currentPositionHandlerRef = useRef(onCurrentPositionChange);
     const currentSpeedHandlerRef = useRef(onCurrentSpeedChange);
     const lastSpeedSampleRef = useRef<{ position: [number, number]; timestamp: number } | null>(null);
@@ -336,8 +360,64 @@ export function CatchMap({
             if (loadDelayTimer.current) {
                 clearTimeout(loadDelayTimer.current);
             }
+
+            if (depthAbortControllerRef.current) {
+                depthAbortControllerRef.current.abort();
+                depthAbortControllerRef.current = null;
+            }
         };
     }, []);
+
+    const displayedPosition = positionOverride ?? currentPosition;
+
+    useEffect(() => {
+        if (!showDepthLayer || !displayedPosition) {
+            setIsDepthLoading(false);
+            return;
+        }
+
+        const [latitude, longitude] = displayedPosition;
+        const params = new URLSearchParams({
+            geom: `POINT(${longitude} ${latitude})`,
+        });
+
+        if (depthAbortControllerRef.current) {
+            depthAbortControllerRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        depthAbortControllerRef.current = controller;
+
+        setIsDepthLoading(true);
+
+        const timeoutId = window.setTimeout(() => {
+            fetch(`${emodnetDepthSampleUrl}?${params.toString()}`, { signal: controller.signal })
+                .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`Depth request failed (${response.status})`))))
+                .then((payload: unknown) => {
+                    if (typeof payload !== 'object' || payload === null) {
+                        setCurrentDepthMeters(null);
+                        return;
+                    }
+
+                    const avg = Number((payload as { avg?: unknown }).avg);
+                    if (!Number.isFinite(avg) || avg <= 0 || avg > 1200) {
+                        setIsDepthLoading(false);
+                        return;
+                    }
+
+                    setCurrentDepthMeters(avg);
+                    setIsDepthLoading(false);
+                })
+                .catch(() => {
+                    setIsDepthLoading(false);
+                });
+        }, 350);
+
+        return () => {
+            window.clearTimeout(timeoutId);
+            controller.abort();
+        };
+    }, [displayedPosition, showDepthLayer]);
 
     useEffect(() => {
         onInitialLoadChange(showLoadingOverlay && !hasCompletedInitialLoad);
@@ -351,8 +431,6 @@ export function CatchMap({
             });
         }
     }, [currentPosition, recenterToCurrentSignal]);
-
-    const displayedPosition = positionOverride ?? currentPosition;
 
     const routeLines = navigationRoutes
         .map((route) => ({
@@ -440,15 +518,37 @@ export function CatchMap({
                         updateWhenZooming
                     />
                 ) : null}
-                {showDepthLayer && canUseDepthLayer ? (
-                    <TileLayer
-                        attribution='&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a>'
-                        url={`https://api.maptiler.com/maps/ocean/{z}/{x}/{y}.png?key=${satelliteKey}`}
-                        opacity={0.75}
-                        keepBuffer={8}
-                        updateWhenIdle={false}
-                        updateWhenZooming
-                    />
+                {showDepthLayer ? (
+                    <>
+                        <WMSTileLayer
+                            url={emodnetDepthWmsUrl}
+                            layers="emodnet:mean_rainbowcolour"
+                            format="image/png"
+                            transparent
+                            opacity={0.3}
+                            version="1.1.1"
+                            attribution='Bathymetry: <a href="https://emodnet.ec.europa.eu/en/bathymetry">EMODnet</a>'
+                        />
+                        <WMSTileLayer
+                            url={emodnetDepthWmsUrl}
+                            layers="emodnet:mean_rainbowcolour"
+                            format="image/png"
+                            transparent
+                            opacity={1}
+                            version="1.1.1"
+                            params={{
+                                sld_body: shallowRiskSld,
+                            }}
+                        />
+                        <WMSTileLayer
+                            url={emodnetDepthWmsUrl}
+                            layers="emodnet:contours"
+                            format="image/png"
+                            transparent
+                            opacity={0.68}
+                            version="1.1.1"
+                        />
+                    </>
                 ) : null}
 
                 {displayedPosition ? (
@@ -483,6 +583,14 @@ export function CatchMap({
                                     ? t('dashboard.you_are_here_accuracy', { accuracy: locationAccuracy })
                                     : t('dashboard.you_are_here')}
                             </Popup>
+                            {showDepthLayer ? (
+                                <Tooltip permanent direction="top" offset={[0, -12]}>
+                                    <span className="text-[11px] font-semibold">
+                                        {t('dashboard.depth')}:{' '}
+                                        {currentDepthMeters !== null ? `${currentDepthMeters.toFixed(1)} m` : isDepthLoading ? '...' : 'n/a'}
+                                    </span>
+                                </Tooltip>
+                            ) : null}
                         </CircleMarker>
                     </>
                 ) : null}
@@ -675,7 +783,6 @@ export function CatchMap({
                     <button
                         type="button"
                         onClick={() => setShowDepthLayer((value) => !value)}
-                        disabled={!canUseDepthLayer}
                         className={`rounded-full px-3 py-2 text-[11px] font-semibold tracking-[0.12em] uppercase shadow-lg backdrop-blur transition ${
                             showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/72 text-white'
                         }`}
@@ -723,7 +830,6 @@ export function CatchMap({
                     <button
                         type="button"
                         onClick={() => setShowDepthLayer((value) => !value)}
-                        disabled={!canUseDepthLayer}
                         className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
                             showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
                         }`}
