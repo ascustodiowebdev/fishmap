@@ -15,15 +15,24 @@ class CatchLogController extends Controller
 {
     public function index(): Response
     {
-        $catchLogs = CatchLog::query()
+        $viewer = Auth::user();
+        $viewerId = $viewer?->id;
+        $viewerIsAdmin = (bool) ($viewer?->is_admin ?? false);
+
+        $catchLogsQuery = CatchLog::query()
             ->with('user:id,name')
-            ->where(function ($query) {
+            ->latest('caught_at')
+            ->latest();
+
+        if (! $viewerIsAdmin) {
+            $catchLogsQuery->where(function ($query) {
                 $query
                     ->where('user_id', Auth::id())
                     ->orWhere('visibility', 'public');
-            })
-            ->latest('caught_at')
-            ->latest()
+            });
+        }
+
+        $catchLogs = $catchLogsQuery
             ->get()
             ->map(fn (CatchLog $catchLog) => [
                 'id' => $catchLog->id,
@@ -38,21 +47,26 @@ class CatchLogController extends Controller
                 'longitude' => $catchLog->longitude,
                 'visibility' => $catchLog->visibility,
                 'owner_name' => $catchLog->user?->name,
-                'is_owner' => $catchLog->user_id === Auth::id(),
+                'is_owner' => $catchLog->user_id === $viewerId,
                 'created_at' => $catchLog->created_at->toIso8601String(),
             ]);
 
         $ownCatchLogs = $catchLogs->where('is_owner', true);
 
-        $navigationRoutes = NavigationRoute::query()
+        $navigationRoutesQuery = NavigationRoute::query()
             ->with('user:id,name', 'points:id,navigation_route_id,latitude,longitude,recorded_at,sequence')
-            ->where(function ($query) {
+            ->latest('started_at')
+            ->limit(50);
+
+        if (! $viewerIsAdmin) {
+            $navigationRoutesQuery->where(function ($query) {
                 $query
                     ->where('user_id', Auth::id())
                     ->orWhere('visibility', 'public');
-            })
-            ->latest('started_at')
-            ->limit(12)
+            });
+        }
+
+        $navigationRoutes = $navigationRoutesQuery
             ->get()
             ->map(fn (NavigationRoute $route) => [
                 'id' => $route->id,
@@ -62,7 +76,8 @@ class CatchLogController extends Controller
                 'ended_at' => optional($route->ended_at)?->toIso8601String(),
                 'point_count' => $route->point_count,
                 'owner_name' => $route->user?->name,
-                'is_owner' => $route->user_id === Auth::id(),
+                'is_owner' => $route->user_id === $viewerId,
+                'can_manage' => $route->user_id === $viewerId || $viewerIsAdmin,
                 'points' => $route->points->map(fn ($point) => [
                     'latitude' => (string) $point->latitude,
                     'longitude' => (string) $point->longitude,

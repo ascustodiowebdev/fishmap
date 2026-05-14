@@ -136,11 +136,39 @@ class AdminController extends Controller
         return back()->with('success', 'Catch pin deleted from the admin panel.');
     }
 
+    public function bulkDestroyCatchLogs(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:catch_logs,id'],
+        ]);
+
+        $count = CatchLog::query()
+            ->whereIn('id', $validated['ids'])
+            ->delete();
+
+        return back()->with('success', "{$count} catch pin(s) deleted from the admin panel.");
+    }
+
     public function destroyNavigationRoute(NavigationRoute $navigationRoute): RedirectResponse
     {
         $navigationRoute->delete();
 
         return back()->with('success', 'Navigation route deleted from the admin panel.');
+    }
+
+    public function bulkDestroyNavigationRoutes(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:navigation_routes,id'],
+        ]);
+
+        $count = NavigationRoute::query()
+            ->whereIn('id', $validated['ids'])
+            ->delete();
+
+        return back()->with('success', "{$count} navigation route(s) deleted from the admin panel.");
     }
 
     public function sendPasswordReset(User $user): RedirectResponse

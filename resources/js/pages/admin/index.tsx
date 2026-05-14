@@ -6,6 +6,7 @@ import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem, type CatchLog, type NavigationRoute, type NavigationRoutePoint, type SharedData, type User } from '@/types';
 import { Head, router, usePage } from '@inertiajs/react';
 import { Shield, Users, Fish, Route, Wrench, Trash2, KeyRound } from 'lucide-react';
+import { useMemo, useState } from 'react';
 
 interface AdminUser extends User {
     catch_logs_count: number;
@@ -93,6 +94,10 @@ export default function AdminIndex() {
             href: '/admin',
         },
     ];
+    const [selectedCatchIds, setSelectedCatchIds] = useState<number[]>([]);
+    const [selectedRouteIds, setSelectedRouteIds] = useState<number[]>([]);
+    const allCatchIds = useMemo(() => catchLogs.map((item) => item.id), [catchLogs]);
+    const allRouteIds = useMemo(() => navigationRoutes.map((item) => item.id), [navigationRoutes]);
 
     const toggleMaintenance = () => {
         router.patch(route('admin.maintenance.update'), {
@@ -147,6 +152,50 @@ export default function AdminIndex() {
 
         router.delete(route('admin.navigation-routes.destroy', navigationRoute.id), {
             preserveScroll: true,
+        });
+    };
+
+    const toggleCatchSelection = (id: number, checked: boolean) => {
+        setSelectedCatchIds((current) => (checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)));
+    };
+
+    const toggleRouteSelection = (id: number, checked: boolean) => {
+        setSelectedRouteIds((current) => (checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)));
+    };
+
+    const bulkDeleteCatches = () => {
+        if (selectedCatchIds.length === 0) {
+            return;
+        }
+
+        if (!window.confirm(`Delete ${selectedCatchIds.length} selected catch pin(s)?`)) {
+            return;
+        }
+
+        router.delete(route('admin.catch-logs.bulk-destroy'), {
+            preserveScroll: true,
+            data: {
+                ids: selectedCatchIds,
+            },
+            onSuccess: () => setSelectedCatchIds([]),
+        });
+    };
+
+    const bulkDeleteRoutes = () => {
+        if (selectedRouteIds.length === 0) {
+            return;
+        }
+
+        if (!window.confirm(`Delete ${selectedRouteIds.length} selected route(s)?`)) {
+            return;
+        }
+
+        router.delete(route('admin.navigation-routes.bulk-destroy'), {
+            preserveScroll: true,
+            data: {
+                ids: selectedRouteIds,
+            },
+            onSuccess: () => setSelectedRouteIds([]),
         });
     };
 
@@ -267,6 +316,18 @@ export default function AdminIndex() {
                     <CardHeader>
                         <CardTitle className="text-xl">Catch pins</CardTitle>
                         <CardDescription>Moderate fake spots quickly without exposing passwords or secrets.</CardDescription>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <Button type="button" variant="outline" onClick={() => setSelectedCatchIds(allCatchIds)}>
+                                Select all
+                            </Button>
+                            <Button type="button" variant="outline" onClick={() => setSelectedCatchIds([])}>
+                                Clear
+                            </Button>
+                            <Button type="button" variant="destructive" onClick={bulkDeleteCatches} disabled={selectedCatchIds.length === 0}>
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete selected ({selectedCatchIds.length})
+                            </Button>
+                        </div>
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {catchLogs.map((catchLog) => (
@@ -295,6 +356,16 @@ export default function AdminIndex() {
                                         Delete pin
                                     </Button>
                                 </div>
+                                <div className="mt-3">
+                                    <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedCatchIds.includes(catchLog.id)}
+                                            onChange={(event) => toggleCatchSelection(catchLog.id, event.target.checked)}
+                                        />
+                                        Select for bulk delete
+                                    </label>
+                                </div>
                             </div>
                         ))}
                     </CardContent>
@@ -304,6 +375,18 @@ export default function AdminIndex() {
                     <CardHeader>
                         <CardTitle className="text-xl">Navigation routes</CardTitle>
                         <CardDescription>Inspect saved route metadata and points, then remove bad or fake paths if needed.</CardDescription>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <Button type="button" variant="outline" onClick={() => setSelectedRouteIds(allRouteIds)}>
+                                Select all
+                            </Button>
+                            <Button type="button" variant="outline" onClick={() => setSelectedRouteIds([])}>
+                                Clear
+                            </Button>
+                            <Button type="button" variant="destructive" onClick={bulkDeleteRoutes} disabled={selectedRouteIds.length === 0}>
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete selected ({selectedRouteIds.length})
+                            </Button>
+                        </div>
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {navigationRoutes.map((navigationRoute) => (
@@ -345,6 +428,16 @@ export default function AdminIndex() {
                                         <Trash2 className="mr-2 h-4 w-4" />
                                         Delete route
                                     </Button>
+                                </div>
+                                <div className="mt-3">
+                                    <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedRouteIds.includes(navigationRoute.id)}
+                                            onChange={(event) => toggleRouteSelection(navigationRoute.id, event.target.checked)}
+                                        />
+                                        Select for bulk delete
+                                    </label>
                                 </div>
                             </div>
                         ))}

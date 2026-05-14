@@ -72,6 +72,7 @@ export interface NavigationRoute {
     point_count: number;
     owner_name?: string | null;
     is_owner?: boolean;
+    can_manage?: boolean;
     points: NavigationRoutePoint[];
 }
 

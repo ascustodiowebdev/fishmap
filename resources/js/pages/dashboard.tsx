@@ -8,7 +8,7 @@ import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Navigation, Plus, Waves, Wind, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, ChevronDown, ChevronUp, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Navigation, Plus, Wind, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -33,6 +33,7 @@ interface RouteGuidanceMetrics {
 }
 
 interface MarineConditionsPayload {
+    source?: string;
     wind: {
         speed_kmh: number | null;
         gust_kmh: number | null;
@@ -106,6 +107,15 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const [marineConditionsError, setMarineConditionsError] = useState<string | null>(null);
     const [marineConditionsLoading, setMarineConditionsLoading] = useState(false);
     const lastMarineFetchRef = useRef<{ latitude: number; longitude: number; fetchedAt: number } | null>(null);
+    const lastMarineRequestAtRef = useRef<number>(0);
+    const marineRequestInFlightRef = useRef(false);
+    const [statsCollapsed, setStatsCollapsed] = useState(false);
+    const [routeCardCollapsed, setRouteCardCollapsed] = useState(false);
+    const [marineCardCollapsed, setMarineCardCollapsed] = useState(false);
+    const [routeEditModeRouteId, setRouteEditModeRouteId] = useState<number | null>(null);
+    const [routeEditDraftPoints, setRouteEditDraftPoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
+    const [routeEditSelection, setRouteEditSelection] = useState<[number, number] | null>(null);
+    const [routeEditDrawPoints, setRouteEditDrawPoints] = useState<[number, number][]>([]);
 
     const form = useForm({
         species: '',
@@ -144,6 +154,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
     const simulationEnabled = canSimulateRoutes && routeSimulationEnabled;
     const displayTrackedPosition = simulationEnabled && simulatedPosition ? simulatedPosition : currentTrackedPosition;
     const activeRoutePolyline = activeRoutePoints.map((point) => [point.latitude, point.longitude] as [number, number]);
+    const routeEditDraftPolyline = routeEditDraftPoints.map((point) => [point.latitude, point.longitude] as [number, number]);
+    const routeEditSelectionPoints = routeEditSelection
+        ? [routeEditDraftPolyline[routeEditSelection[0]], routeEditDraftPolyline[routeEditSelection[1]]].filter(Boolean)
+        : [];
+    const hasRouteEditTwoAnchors = Boolean(routeEditSelection && routeEditSelection[0] !== routeEditSelection[1]);
 
     const privateFishSpots = useMemo(
         () => catchLogs.filter((catchLog) => catchLog.is_owner && catchLog.visibility === 'private'),
@@ -283,9 +298,18 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             return;
         }
 
+        if (marineRequestInFlightRef.current) {
+            return;
+        }
+
         const [latitude, longitude] = displayTrackedPosition;
         const previous = lastMarineFetchRef.current;
         const now = Date.now();
+        const MIN_MARINE_FETCH_INTERVAL_MS = 45 * 1000;
+
+        if (now - lastMarineRequestAtRef.current < MIN_MARINE_FETCH_INTERVAL_MS) {
+            return;
+        }
 
         if (previous) {
             const movedMeters = calculateDistanceMeters([previous.latitude, previous.longitude], [latitude, longitude]);
@@ -296,12 +320,13 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             }
         }
 
-        const controller = new AbortController();
+        marineRequestInFlightRef.current = true;
+        lastMarineRequestAtRef.current = now;
         setMarineConditionsLoading(true);
         setMarineConditionsError(null);
 
         const url = `${route('marine-conditions')}?latitude=${latitude}&longitude=${longitude}`;
-        fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } })
+        fetch(url, { headers: { Accept: 'application/json' } })
             .then(async (response) => {
                 if (!response.ok) {
                     throw new Error(`Marine conditions request failed: ${response.status}`);
@@ -318,19 +343,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 };
             })
             .catch((error: unknown) => {
-                if (error instanceof DOMException && error.name === 'AbortError') {
-                    return;
-                }
-
                 setMarineConditionsError(t('common.error'));
             })
             .finally(() => {
+                marineRequestInFlightRef.current = false;
                 setMarineConditionsLoading(false);
             });
-
-        return () => {
-            controller.abort();
-        };
     }, [displayTrackedPosition, simulationEnabled, t]);
 
     useEffect(() => {
@@ -712,6 +730,182 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         [canRecordRoutes, populateRouteForm],
     );
 
+    const startRouteGeometryEdit = useCallback(() => {
+        if (!activeRoute) {
+            return;
+        }
+
+        const parsedPoints = activeRoute.points
+            .map((point) => ({
+                latitude: Number(String(point.latitude).replace(',', '.')),
+                longitude: Number(String(point.longitude).replace(',', '.')),
+                recorded_at: point.recorded_at ?? new Date().toISOString(),
+            }))
+            .filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude));
+
+        if (parsedPoints.length < 2) {
+            setRouteSubmitError('Route must have at least 2 valid points to edit on map.');
+            return;
+        }
+
+        setRouteEditDraftPoints(parsedPoints);
+        setRouteEditSelection(null);
+        setRouteEditDrawPoints([]);
+        setRouteEditModeRouteId(activeRoute.id);
+        setRouteDialogOpen(false);
+    }, [activeRoute]);
+
+    const handleRouteEditMapPick = useCallback(
+        (routeId: number, position: [number, number]) => {
+            if (routeId !== routeEditModeRouteId || routeEditDraftPoints.length < 2) {
+                return;
+            }
+
+            let nearestIndex = 0;
+            let nearestDistance = Number.POSITIVE_INFINITY;
+
+            routeEditDraftPoints.forEach((point, index) => {
+                const distance = calculateDistanceMeters([point.latitude, point.longitude], position);
+                if (distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearestIndex = index;
+                }
+            });
+
+            setRouteEditSelection((current) => {
+                if (!current) {
+                    setRouteEditDrawPoints([]);
+                    return [nearestIndex, nearestIndex];
+                }
+
+                if (current[0] === current[1]) {
+                    return [current[0], nearestIndex];
+                }
+
+                setRouteEditDrawPoints([]);
+                return [nearestIndex, nearestIndex];
+            });
+        },
+        [routeEditDraftPoints, routeEditModeRouteId],
+    );
+
+    const appendRouteEditDrawPoint = useCallback(
+        (position: [number, number]) => {
+            if (!routeEditModeRouteId || !routeEditSelection || routeEditSelection[0] !== routeEditSelection[1]) {
+                return;
+            }
+
+            setRouteEditDrawPoints((current) => {
+                const last = current[current.length - 1];
+                if (last && Math.abs(last[0] - position[0]) < 0.0000001 && Math.abs(last[1] - position[1]) < 0.0000001) {
+                    return current;
+                }
+                return [...current, position];
+            });
+        },
+        [routeEditModeRouteId, routeEditSelection],
+    );
+
+    const removeSelectedRouteSegment = useCallback(() => {
+        if (!routeEditSelection) {
+            return;
+        }
+
+        const startIndex = Math.min(routeEditSelection[0], routeEditSelection[1]);
+        const endIndex = Math.max(routeEditSelection[0], routeEditSelection[1]);
+
+        if (endIndex - startIndex < 2) {
+            setRouteSubmitError('Pick two points far enough apart to remove the bad segment.');
+            return;
+        }
+
+        setRouteEditDraftPoints((points) => {
+            const nextPoints = points.filter((_, index) => index <= startIndex || index >= endIndex);
+            return nextPoints.length >= 2 ? nextPoints : points;
+        });
+        setRouteEditSelection(null);
+        setRouteEditDrawPoints([]);
+        setRouteSubmitError(null);
+    }, [routeEditSelection]);
+
+    const applyRouteReplacementSegment = useCallback(() => {
+        if (!routeEditSelection || routeEditDrawPoints.length < 1) {
+            setRouteSubmitError('Pick start/end anchors and draw at least one replacement point.');
+            return;
+        }
+
+        const startIndex = Math.min(routeEditSelection[0], routeEditSelection[1]);
+        const endIndex = Math.max(routeEditSelection[0], routeEditSelection[1]);
+
+        if (startIndex === endIndex) {
+            setRouteSubmitError('Pick a different end anchor on the route (or orange marker) to finish replacement.');
+            return;
+        }
+
+        setRouteEditDraftPoints((points) => {
+            const startAnchor = points[startIndex];
+            const endAnchor = points[endIndex];
+            if (!startAnchor || !endAnchor) {
+                return points;
+            }
+
+            const replacement = [
+                startAnchor,
+                ...routeEditDrawPoints.map((drawPoint, idx) => ({
+                    latitude: drawPoint[0],
+                    longitude: drawPoint[1],
+                    recorded_at: new Date(Date.now() + idx * 1000).toISOString(),
+                })),
+                endAnchor,
+            ];
+
+            return [...points.slice(0, startIndex), ...replacement, ...points.slice(endIndex + 1)];
+        });
+
+        setRouteEditSelection(null);
+        setRouteEditDrawPoints([]);
+        setRouteSubmitError(null);
+    }, [routeEditDrawPoints, routeEditSelection]);
+
+    const autoPickRouteEditEndAnchor = useCallback(() => {
+        if (!routeEditSelection || routeEditSelection[0] !== routeEditSelection[1] || routeEditDrawPoints.length === 0 || routeEditDraftPoints.length < 2) {
+            return;
+        }
+
+        const startIndex = routeEditSelection[0];
+        const target = routeEditDrawPoints[routeEditDrawPoints.length - 1];
+        if (!target) {
+            return;
+        }
+
+        let nearestIndex = -1;
+        let nearestDistance = Number.POSITIVE_INFINITY;
+
+        routeEditDraftPoints.forEach((point, index) => {
+            if (index === startIndex) {
+                return;
+            }
+
+            const distance = calculateDistanceMeters([point.latitude, point.longitude], target);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestIndex = index;
+            }
+        });
+
+        if (nearestIndex >= 0) {
+            setRouteEditSelection([startIndex, nearestIndex]);
+            setRouteSubmitError(null);
+        }
+    }, [routeEditDraftPoints, routeEditDrawPoints, routeEditSelection]);
+
+    const cancelRouteGeometryEdit = useCallback(() => {
+        setRouteEditModeRouteId(null);
+        setRouteEditDraftPoints([]);
+        setRouteEditSelection(null);
+        setRouteEditDrawPoints([]);
+    }, []);
+
     const openRouteDeleteDialog = useCallback((navigationRoute: NavigationRoute) => {
         if (!canRecordRoutes) {
             return;
@@ -845,6 +1039,43 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
             },
         });
     }, [activeRoute, canRecordRoutes]);
+
+    const saveRouteGeometryEdit = useCallback(() => {
+        if (!activeRoute || !routeEditModeRouteId || routeEditDraftPoints.length < 2 || isSavingRoute) {
+            return;
+        }
+
+        const startedAt = activeRoute.started_at ?? new Date().toISOString();
+        const endedAt = activeRoute.ended_at ?? startedAt;
+
+        setIsSavingRoute(true);
+        setRouteSubmitError(null);
+
+        router.put(
+            route('navigation-routes.update', activeRoute.id),
+            {
+                name: activeRoute.name || null,
+                visibility: activeRoute.visibility,
+                started_at: startedAt,
+                ended_at: endedAt,
+                points: routeEditDraftPoints,
+            },
+            {
+                preserveScroll: true,
+                onError: (errors) => {
+                    setIsSavingRoute(false);
+                    setRouteSubmitError(errors.points ?? errors.name ?? 'Could not save route geometry changes.');
+                },
+                onSuccess: () => {
+                    setIsSavingRoute(false);
+                    setRouteEditModeRouteId(null);
+                    setRouteEditDraftPoints([]);
+                    setRouteEditSelection(null);
+                    setActiveRoute(null);
+                },
+            },
+        );
+    }, [activeRoute, isSavingRoute, routeEditDraftPoints, routeEditModeRouteId]);
 
     const beginPickAnotherSpot = useCallback(() => {
         if (holdOpenTimer.current) {
@@ -1057,7 +1288,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
         });
     }, [displayTrackedPosition, fetchCurrentPositionForCatch]);
 
-    const latestTripLabel = stats.latest_trip ? new Date(stats.latest_trip).toLocaleDateString() : t('dashboard.no_trips');
     const fishSpotCount = catchLogs.length.toString();
     const routeCount = navigationRoutes.length.toString();
 
@@ -1076,13 +1306,18 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         activeRoutePoints={activeRoutePolyline}
                         positionOverride={displayTrackedPosition}
                         selectedPosition={selectedPosition}
-                        allowTapSelection={mapPickMode || routeSimulationEnabled}
+                        allowTapSelection={mapPickMode || routeSimulationEnabled || Boolean(routeEditModeRouteId)}
                         onSelectPosition={(position) => {
                             if (mapPickMode) {
                                 setCoordinates(position);
                                 setMapPickMode(false);
                                 setDialogStep('confirm-location');
                                 setDialogOpen(true);
+                                return;
+                            }
+
+                            if (routeEditModeRouteId) {
+                                appendRouteEditDrawPoint(position);
                                 return;
                             }
 
@@ -1126,6 +1361,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         activeGuidanceRouteId={guidedRouteId}
                         guidanceNearestPoint={guidanceMetrics?.nearestPoint ?? null}
                         isGuidanceActive={isGuidanceActive}
+                        routeEditRouteId={routeEditModeRouteId}
+                        routeEditPoints={routeEditDraftPolyline}
+                        routeEditSelectionPoints={routeEditSelectionPoints as [number, number][]}
+                        routeEditDrawPoints={routeEditDrawPoints}
+                        onRouteEditMapPick={handleRouteEditMapPick}
                     />
 
                     <div
@@ -1160,28 +1400,39 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                 <p className="mt-2 text-sm leading-6 text-slate-600">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                                <StatCard
-                                    icon={Fish}
-                                    label={t('dashboard.fish_spots')}
-                                    value={fishSpotCount}
-                                    onClick={() => openLibraryDialog('spots')}
-                                />
-                                <StatCard
-                                    icon={Globe}
-                                    label={t('dashboard.routes')}
-                                    value={routeCount}
-                                    onClick={() => openLibraryDialog('routes')}
-                                />
-                                <StatCard icon={Waves} label={t('dashboard.latest')} value={latestTripLabel} compact className="col-span-2 md:col-span-1" />
+                            <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+                                <button
+                                    type="button"
+                                    onClick={() => setStatsCollapsed((current) => !current)}
+                                    className="flex w-full items-center justify-between gap-3 text-left"
+                                >
+                                    <p className="text-sm font-semibold text-slate-950">{t('dashboard.fish_spots')} / {t('dashboard.routes')}</p>
+                                    {statsCollapsed ? <ChevronDown className="size-4 text-slate-600" /> : <ChevronUp className="size-4 text-slate-600" />}
+                                </button>
+                                {!statsCollapsed ? (
+                                    <div className="mt-3 grid grid-cols-2 gap-3">
+                                        <StatCard
+                                            icon={Fish}
+                                            label={t('dashboard.fish_spots')}
+                                            value={fishSpotCount}
+                                            onClick={() => openLibraryDialog('spots')}
+                                        />
+                                        <StatCard
+                                            icon={Globe}
+                                            label={t('dashboard.routes')}
+                                            value={routeCount}
+                                            onClick={() => openLibraryDialog('routes')}
+                                        />
+                                    </div>
+                                ) : null}
                             </div>
 
                             {canRecordRoutes ? (
                             <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                <div className="flex items-start justify-between gap-3">
                                     <div>
                                         <p className="text-sm font-semibold text-slate-950">{t('dashboard.route_recording')}</p>
-                                        <p className="mt-1 text-xs text-slate-600">
+                                        <p className="mt-1 text-xs text-slate-600 pr-4">
                                             {isRecordingRoute
                                                 ? t('dashboard.route_recording_live', { count: activeRoutePoints.length })
                                                 : simulationEnabled
@@ -1194,6 +1445,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                             </p>
                                         ) : null}
                                     </div>
+                                    <button type="button" onClick={() => setRouteCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600">
+                                        {routeCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
+                                    </button>
+                                </div>
+
+                                {!routeCardCollapsed ? <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                                     {canSimulateRoutes ? (
                                         <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto">
                                             <input
@@ -1211,9 +1468,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                             {t('dashboard.simulation')}
                                         </label>
                                     ) : null}
-                                </div>
-
-                                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
                                     <select
                                         value={recordingVisibility}
                                         onChange={(event) => setRecordingVisibility(event.target.value as 'private' | 'public')}
@@ -1232,7 +1486,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                             {t('dashboard.start_recording')}
                                         </Button>
                                     )}
-                                </div>
+                                </div> : null}
                             </div>
                             ) : null}
 
@@ -1243,45 +1497,57 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                             <p className="text-sm font-semibold text-slate-950">{t('dashboard.marine_conditions')}</p>
                                             <p className="mt-1 text-xs text-slate-600">{t('dashboard.marine_conditions_copy')}</p>
                                         </div>
-                                        <Wind className="mt-0.5 size-4 text-cyan-700" />
-                                    </div>
-
-                                    <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                            <p className="font-medium text-slate-500">{t('dashboard.wind')}</p>
-                                            <p className="mt-1 text-sm font-semibold text-slate-900">
-                                                {formatWindLabel(marineConditions?.wind.speed_kmh, marineConditions?.wind.direction_deg)}
-                                            </p>
-                                        </div>
-                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                            <p className="font-medium text-slate-500">{t('dashboard.wind_gust')}</p>
-                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatSpeedKmh(marineConditions?.wind.gust_kmh ?? null)}</p>
-                                        </div>
-                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                            <p className="font-medium text-slate-500">{t('dashboard.next_high_tide')}</p>
-                                            <p className="mt-1 text-sm font-semibold text-slate-900">
-                                                {formatTideTimeAndHeight(marineConditions?.tide.next_high_at, marineConditions?.tide.next_high_m)}
-                                            </p>
-                                        </div>
-                                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                            <p className="font-medium text-slate-500">{t('dashboard.next_low_tide')}</p>
-                                            <p className="mt-1 text-sm font-semibold text-slate-900">
-                                                {formatTideTimeAndHeight(marineConditions?.tide.next_low_at, marineConditions?.tide.next_low_m)}
-                                            </p>
+                                        <div className="flex items-center gap-2">
+                                            <Wind className="mt-0.5 size-4 text-cyan-700" />
+                                            <button type="button" onClick={() => setMarineCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600">
+                                                {marineCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
+                                            </button>
                                         </div>
                                     </div>
 
-                                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                                        <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-medium text-cyan-900">
-                                            {t('dashboard.tide_state')}: {formatTideState(marineConditions?.tide.state, t)}
-                                        </span>
-                                        <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-900">
-                                            {t('dashboard.tide_coefficient')}: {marineConditions?.tide.coefficient ?? '--'}
-                                        </span>
-                                    </div>
+                                    {!marineCardCollapsed ? (
+                                        <>
+                                            <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="font-medium text-slate-500">{t('dashboard.wind')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                        {formatWindLabel(marineConditions?.wind.speed_kmh, marineConditions?.wind.direction_deg)}
+                                                    </p>
+                                                </div>
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="font-medium text-slate-500">{t('dashboard.wind_gust')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{formatSpeedKmh(marineConditions?.wind.gust_kmh ?? null)}</p>
+                                                </div>
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="font-medium text-slate-500">{t('dashboard.next_high_tide')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                        {formatTideTimeAndHeight(marineConditions?.tide.next_high_at, marineConditions?.tide.next_high_m)}
+                                                    </p>
+                                                </div>
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="font-medium text-slate-500">{t('dashboard.next_low_tide')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                        {formatTideTimeAndHeight(marineConditions?.tide.next_low_at, marineConditions?.tide.next_low_m)}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                                                <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-medium text-cyan-900">
+                                                    {t('dashboard.tide_state')}: {formatTideState(marineConditions?.tide.state, t)}
+                                                </span>
+                                                <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-900">
+                                                    {t('dashboard.tide_coefficient')}: {marineConditions?.tide.coefficient ?? '--'}
+                                                </span>
+                                            </div>
+                                        </>
+                                    ) : null}
 
                                     {marineConditionsLoading ? <p className="mt-3 text-[11px] text-slate-500">{t('dashboard.loading_marine_conditions')}</p> : null}
                                     {marineConditionsError ? <p className="mt-3 text-[11px] text-amber-700">{marineConditionsError}</p> : null}
+                                    {marineConditions?.source === 'unavailable' ? (
+                                        <p className="mt-3 text-[11px] text-amber-700">{t('dashboard.tide_official_unavailable')}</p>
+                                    ) : null}
                                 </div>
                             ) : null}
 
@@ -1463,22 +1729,44 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                     <div className="mt-6 grid gap-3 overflow-y-auto pr-1">
                                         {navigationRoutes.length > 0 ? (
                                             navigationRoutes.map((navigationRoute) => (
-                                                <button
+                                                <div
                                                     key={`route-library-${navigationRoute.id}`}
-                                                    type="button"
-                                                    onClick={() => requestRouteGuidance(navigationRoute)}
                                                     className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
                                                 >
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <p className="font-semibold text-slate-950 dark:text-slate-50">{navigationRoute.name}</p>
-                                                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                                                            {navigationRoute.is_owner ? t('dashboard.yours') : navigationRoute.owner_name ?? 'Fishmap'}
-                                                        </span>
-                                                    </div>
-                                                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                                        {t('dashboard.route_points', { count: navigationRoute.point_count })}
-                                                    </p>
-                                                </button>
+                                                    <button type="button" onClick={() => requestRouteGuidance(navigationRoute)} className="w-full text-left">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <p className="font-semibold text-slate-950 dark:text-slate-50">{navigationRoute.name}</p>
+                                                            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                                                                {navigationRoute.is_owner ? t('dashboard.yours') : navigationRoute.owner_name ?? 'Fishmap'}
+                                                            </span>
+                                                        </div>
+                                                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                                            {t('dashboard.route_points', { count: navigationRoute.point_count })}
+                                                        </p>
+                                                    </button>
+                                                    {(navigationRoute.can_manage ?? navigationRoute.is_owner) ? (
+                                                        <div className="mt-3 flex items-center gap-2">
+                                                            <Button
+                                                                type="button"
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="h-8 rounded-xl"
+                                                                onClick={() => openRouteEditDialog(navigationRoute)}
+                                                            >
+                                                                {t('dashboard.edit')}
+                                                            </Button>
+                                                            <Button
+                                                                type="button"
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="h-8 rounded-xl border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                                                                onClick={() => openRouteDeleteDialog(navigationRoute)}
+                                                            >
+                                                                {t('dashboard.delete')}
+                                                            </Button>
+                                                        </div>
+                                                    ) : null}
+                                                </div>
                                             ))
                                         ) : (
                                             <p className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.no_routes_available')}</p>
@@ -1527,6 +1815,88 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                             <Plus className="size-5" />
                         </Button>
                     </div>
+
+                    {routeEditModeRouteId ? (
+                        <div className="pointer-events-auto absolute right-3 top-4 z-[530] w-[min(92vw,360px)] rounded-2xl border border-white/70 bg-white/92 p-3 shadow-xl backdrop-blur md:right-5">
+                            <p className="text-sm font-semibold text-slate-900">Route fix mode</p>
+                            {(() => {
+                                const hasStartAnchor = Boolean(routeEditSelection);
+                                const hasBothAnchors = hasStartAnchor && routeEditSelection![0] !== routeEditSelection![1];
+                                const hasDraw = routeEditDrawPoints.length > 0;
+                                const currentStep = !hasStartAnchor ? 1 : !hasBothAnchors ? 2 : 3;
+
+                                return (
+                                    <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] font-semibold">
+                                        <div className={`rounded-lg px-2 py-1 text-center ${currentStep === 1 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                            1 Start
+                                        </div>
+                                        <div className={`rounded-lg px-2 py-1 text-center ${currentStep === 2 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                            2 Draw
+                                        </div>
+                                        <div className={`rounded-lg px-2 py-1 text-center ${currentStep === 3 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                            3 End
+                                        </div>
+                                        <div className="col-span-3 mt-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700">
+                                            {!hasStartAnchor
+                                                ? 'Step 1: click the route or orange marker to set START anchor.'
+                                                : !hasDraw
+                                                  ? 'Step 2: click on map to draw replacement path points.'
+                                                  : !hasBothAnchors
+                                                    ? 'Step 3: click route/orange marker again to set END anchor.'
+                                                    : 'Ready: click Apply replace, then Save route.'}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                            <p className="mt-1 text-xs text-slate-600">
+                                Tap route for start anchor, tap map to draw replacement, tap route for end anchor, then apply.
+                            </p>
+                            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                                {routeEditSelection
+                                    ? `Selected segment: ${Math.min(routeEditSelection[0], routeEditSelection[1])} -> ${Math.max(routeEditSelection[0], routeEditSelection[1])}`
+                                    : 'No segment selected yet'}
+                            </div>
+                            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                                Drawn points: {routeEditDrawPoints.length}
+                            </div>
+                            {routeSubmitError ? <div className="mt-2 text-xs text-amber-700">{routeSubmitError}</div> : null}
+                            {!hasRouteEditTwoAnchors ? (
+                                <div className="mt-2 text-xs text-amber-700">Pick a different END anchor on the route to enable Apply replace.</div>
+                            ) : null}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <Button type="button" size="sm" variant="outline" onClick={() => setRouteEditSelection(null)}>
+                                    Clear pick
+                                </Button>
+                                <Button type="button" size="sm" variant="outline" onClick={() => setRouteEditDrawPoints((current) => current.slice(0, -1))} disabled={routeEditDrawPoints.length === 0}>
+                                    Undo draw
+                                </Button>
+                                <Button type="button" size="sm" variant="outline" onClick={() => setRouteEditDrawPoints([])} disabled={routeEditDrawPoints.length === 0}>
+                                    Clear draw
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={autoPickRouteEditEndAnchor}
+                                    disabled={!routeEditSelection || routeEditSelection[0] !== routeEditSelection[1] || routeEditDrawPoints.length === 0}
+                                >
+                                    Auto end anchor
+                                </Button>
+                                <Button type="button" size="sm" variant="outline" onClick={applyRouteReplacementSegment} disabled={!hasRouteEditTwoAnchors || routeEditDrawPoints.length === 0}>
+                                    Apply replace
+                                </Button>
+                                <Button type="button" size="sm" variant="outline" onClick={removeSelectedRouteSegment} disabled={!routeEditSelection}>
+                                    Remove segment
+                                </Button>
+                                <Button type="button" size="sm" variant="outline" onClick={cancelRouteGeometryEdit} disabled={isSavingRoute}>
+                                    Cancel
+                                </Button>
+                                <Button type="button" size="sm" onClick={saveRouteGeometryEdit} disabled={isSavingRoute || routeEditDraftPoints.length < 2}>
+                                    {isSavingRoute ? t('common.saving') : 'Save route'}
+                                </Button>
+                            </div>
+                        </div>
+                    ) : null}
 
                     <Dialog
                         open={dialogOpen}
@@ -1957,6 +2327,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                                                     count: routeDialogMode === 'create' ? activeRoutePoints.length : activeRoute?.point_count ?? 0,
                                                 })}
                                             </div>
+
+                                            {routeDialogMode === 'edit' ? (
+                                                <Button type="button" variant="outline" onClick={startRouteGeometryEdit}>
+                                                    Fix route on map
+                                                </Button>
+                                            ) : null}
 
                                             <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                                                 <Button

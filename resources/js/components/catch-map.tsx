@@ -36,6 +36,11 @@ interface CatchMapProps {
     activeGuidanceRouteId: number | null;
     guidanceNearestPoint: [number, number] | null;
     isGuidanceActive: boolean;
+    routeEditRouteId?: number | null;
+    routeEditPoints?: [number, number][];
+    routeEditSelectionPoints?: [number, number][];
+    routeEditDrawPoints?: [number, number][];
+    onRouteEditMapPick?: (routeId: number, position: [number, number]) => void;
 }
 
 const defaultCenter: [number, number] = [38.7223, -9.1393];
@@ -76,6 +81,17 @@ const MIN_MOVEMENT_FOR_SPEED_METERS = 2;
 const MAX_ACCURACY_FOR_SPEED_METERS = 25;
 const MAX_TRACK_SPIKE_SPEED_KMH = 120;
 const MAX_TRACK_SPIKE_DISTANCE_METERS = 120;
+const parseCoordinate = (value: string | number | null | undefined): number => {
+    if (typeof value === 'number') {
+        return value;
+    }
+
+    if (typeof value !== 'string') {
+        return Number.NaN;
+    }
+
+    return Number(value.replace(',', '.'));
+};
 
 export function CatchMap({
     catchLogs,
@@ -104,6 +120,11 @@ export function CatchMap({
     activeGuidanceRouteId,
     guidanceNearestPoint,
     isGuidanceActive,
+    routeEditRouteId = null,
+    routeEditPoints = [],
+    routeEditSelectionPoints = [],
+    routeEditDrawPoints = [],
+    onRouteEditMapPick,
 }: CatchMapProps) {
     const { t } = useTranslator();
     const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(null);
@@ -134,8 +155,8 @@ export function CatchMap({
         .filter((catchLog) => catchLog.latitude && catchLog.longitude)
         .map((catchLog) => ({
             ...catchLog,
-            latitude: Number(catchLog.latitude),
-            longitude: Number(catchLog.longitude),
+            latitude: parseCoordinate(catchLog.latitude),
+            longitude: parseCoordinate(catchLog.longitude),
         }))
         .filter((catchLog) => Number.isFinite(catchLog.latitude) && Number.isFinite(catchLog.longitude));
 
@@ -436,7 +457,7 @@ export function CatchMap({
         .map((route) => ({
             ...route,
             latlngs: route.points
-                .map((point) => [Number(point.latitude), Number(point.longitude)] as [number, number])
+                .map((point) => [parseCoordinate(point.latitude), parseCoordinate(point.longitude)] as [number, number])
                 .filter(([latitude, longitude]) => Number.isFinite(latitude) && Number.isFinite(longitude)),
         }))
         .filter((route) => route.latlngs.length >= 2);
@@ -598,11 +619,28 @@ export function CatchMap({
                 {routeLines.map((route) => (
                     <Polyline
                         key={`route-${route.id}`}
-                        positions={route.latlngs}
+                        positions={routeEditRouteId === route.id && routeEditPoints.length >= 2 ? routeEditPoints : route.latlngs}
                         pathOptions={{
-                            color: route.id === activeGuidanceRouteId ? '#14b8a6' : route.is_owner ? '#f59e0b' : '#60a5fa',
-                            weight: route.id === activeGuidanceRouteId ? 6 : 4,
-                            opacity: route.id === activeGuidanceRouteId ? 0.95 : 0.8,
+                            color:
+                                routeEditRouteId === route.id
+                                    ? '#ef4444'
+                                    : route.id === activeGuidanceRouteId
+                                      ? '#14b8a6'
+                                      : route.is_owner
+                                        ? '#f59e0b'
+                                        : '#60a5fa',
+                            weight: routeEditRouteId === route.id ? 6 : route.id === activeGuidanceRouteId ? 6 : 4,
+                            opacity: routeEditRouteId === route.id ? 0.98 : route.id === activeGuidanceRouteId ? 0.95 : 0.8,
+                        }}
+                        eventHandlers={{
+                            click: (event) => {
+                                if (routeEditRouteId === route.id && onRouteEditMapPick) {
+                                    onRouteEditMapPick(route.id, [event.latlng.lat, event.latlng.lng]);
+                                    if (event.originalEvent) {
+                                        L.DomEvent.stopPropagation(event.originalEvent);
+                                    }
+                                }
+                            },
                         }}
                     >
                         <Popup className="fishmap-popup fishmap-popup--route">
@@ -621,7 +659,7 @@ export function CatchMap({
                                     <button type="button" className="fishmap-popup-button fishmap-popup-button--secondary" onClick={() => onStartRouteGuidance(route)}>
                                         {t('dashboard.guide_route')}
                                     </button>
-                                    {route.is_owner && canRecordRoutes ? (
+                                    {(route.can_manage ?? route.is_owner) && canRecordRoutes ? (
                                         <>
                                             <button
                                                 type="button"
@@ -652,6 +690,42 @@ export function CatchMap({
                             color: '#22c55e',
                             weight: 5,
                             opacity: 0.95,
+                        }}
+                    />
+                ) : null}
+
+                {routeEditSelectionPoints.map((selectionPoint, index) => (
+                    <CircleMarker
+                        key={`route-edit-selection-${index}`}
+                        center={selectionPoint}
+                        radius={8}
+                        eventHandlers={{
+                            click: (event) => {
+                                if (routeEditRouteId && onRouteEditMapPick) {
+                                    onRouteEditMapPick(routeEditRouteId, selectionPoint);
+                                    if (event.originalEvent) {
+                                        L.DomEvent.stopPropagation(event.originalEvent);
+                                    }
+                                }
+                            },
+                        }}
+                        pathOptions={{
+                            color: '#ffffff',
+                            fillColor: index === 0 ? '#ef4444' : '#f59e0b',
+                            fillOpacity: 0.95,
+                            weight: 2,
+                        }}
+                    />
+                ))}
+
+                {routeEditDrawPoints.length >= 2 ? (
+                    <Polyline
+                        positions={routeEditDrawPoints}
+                        pathOptions={{
+                            color: '#f59e0b',
+                            weight: 4,
+                            opacity: 0.95,
+                            dashArray: '10 8',
                         }}
                     />
                 ) : null}

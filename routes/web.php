@@ -45,7 +45,9 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::post('users/{user}/password-reset', [AdminController::class, 'sendPasswordReset'])->name('users.password-reset');
     Route::delete('users/{user}', [AdminController::class, 'destroyUser'])->name('users.destroy');
     Route::delete('catch-logs/{catchLog}', [AdminController::class, 'destroyCatchLog'])->name('catch-logs.destroy');
+    Route::delete('catch-logs', [AdminController::class, 'bulkDestroyCatchLogs'])->name('catch-logs.bulk-destroy');
     Route::delete('navigation-routes/{navigationRoute}', [AdminController::class, 'destroyNavigationRoute'])->name('navigation-routes.destroy');
+    Route::delete('navigation-routes', [AdminController::class, 'bulkDestroyNavigationRoutes'])->name('navigation-routes.bulk-destroy');
 });
 
 require __DIR__.'/settings.php';
