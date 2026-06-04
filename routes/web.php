@@ -35,7 +35,7 @@ Route::middleware(['auth', 'maintenance'])->group(function () {
     Route::post('navigation-routes', [NavigationRouteController::class, 'store'])->name('navigation-routes.store');
     Route::put('navigation-routes/{navigationRoute}', [NavigationRouteController::class, 'update'])->name('navigation-routes.update');
     Route::delete('navigation-routes/{navigationRoute}', [NavigationRouteController::class, 'destroy'])->name('navigation-routes.destroy');
-    Route::get('marine-conditions', MarineConditionsController::class)->name('marine-conditions');
+    Route::get('marine-conditions', MarineConditionsController::class)->middleware('throttle:60,1')->name('marine-conditions');
 });
 
 Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {

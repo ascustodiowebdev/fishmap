@@ -104,8 +104,6 @@ class CatchLogController extends Controller
             'user_id' => $request->user()?->id,
             'species' => $validated['species'],
             'visibility' => $validated['visibility'],
-            'latitude' => $validated['latitude'],
-            'longitude' => $validated['longitude'],
         ]);
 
         $request->user()->catchLogs()->create($validated);
@@ -148,7 +146,7 @@ class CatchLogController extends Controller
             'species' => ['required', 'string', 'max:120'],
             'bait_used' => ['nullable', 'string', 'max:120'],
             'notes' => ['nullable', 'string', 'max:1000'],
-            'photo_url' => ['nullable', 'url', 'max:2048'],
+            'photo_url' => ['nullable', 'url:http,https', 'max:2048'],
             'fish_length_cm' => ['nullable', 'numeric', 'between:0,999.9'],
             'fish_weight_kg' => ['nullable', 'numeric', 'between:0,999.99'],
             'caught_at' => ['nullable', 'date'],

@@ -14,11 +14,19 @@ use Inertia\Response;
 
 class AdminController extends Controller
 {
+    private const ADMIN_LIST_LIMIT = 200;
+    private const ADMIN_BULK_DELETE_LIMIT = 200;
+
     public function index(): Response
     {
+        $userCount = User::query()->count();
+        $catchLogCount = CatchLog::query()->count();
+        $navigationRouteCount = NavigationRoute::query()->count();
+
         $users = User::query()
             ->withCount(['catchLogs', 'navigationRoutes'])
             ->latest()
+            ->limit(self::ADMIN_LIST_LIMIT)
             ->get()
             ->map(fn (User $user) => [
                 'id' => $user->id,
@@ -36,6 +44,7 @@ class AdminController extends Controller
             ->with('user:id,name,email')
             ->latest('caught_at')
             ->latest()
+            ->limit(self::ADMIN_LIST_LIMIT)
             ->get()
             ->map(fn (CatchLog $catchLog) => [
                 'id' => $catchLog->id,
@@ -62,6 +71,7 @@ class AdminController extends Controller
             ->with('user:id,name,email', 'points:id,navigation_route_id,sequence,latitude,longitude,recorded_at')
             ->latest('started_at')
             ->latest()
+            ->limit(self::ADMIN_LIST_LIMIT)
             ->get()
             ->map(fn (NavigationRoute $route) => [
                 'id' => $route->id,
@@ -95,10 +105,11 @@ class AdminController extends Controller
             'users' => $users,
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
+            'listLimit' => self::ADMIN_LIST_LIMIT,
             'stats' => [
-                'users' => $users->count(),
-                'catches' => $catchLogs->count(),
-                'routes' => $navigationRoutes->count(),
+                'users' => $userCount,
+                'catches' => $catchLogCount,
+                'routes' => $navigationRouteCount,
             ],
         ]);
     }
@@ -139,7 +150,7 @@ class AdminController extends Controller
     public function bulkDestroyCatchLogs(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
+            'ids' => ['required', 'array', 'min:1', 'max:'.self::ADMIN_BULK_DELETE_LIMIT],
             'ids.*' => ['integer', 'exists:catch_logs,id'],
         ]);
 
@@ -160,7 +171,7 @@ class AdminController extends Controller
     public function bulkDestroyNavigationRoutes(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
+            'ids' => ['required', 'array', 'min:1', 'max:'.self::ADMIN_BULK_DELETE_LIMIT],
             'ids.*' => ['integer', 'exists:navigation_routes,id'],
         ]);
 

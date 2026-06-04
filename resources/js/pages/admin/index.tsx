@@ -39,6 +39,7 @@ interface AdminNavigationRoute extends NavigationRoute {
 interface AdminPageProps extends SharedData {
     maintenanceMode: boolean;
     registrationsOpen: boolean;
+    listLimit: number;
     users: AdminUser[];
     catchLogs: AdminCatchLog[];
     navigationRoutes: AdminNavigationRoute[];
@@ -86,7 +87,7 @@ function StatCard({
 
 export default function AdminIndex() {
     const { props } = usePage<AdminPageProps>();
-    const { maintenanceMode, registrationsOpen, users, catchLogs, navigationRoutes, stats, flash } = props;
+    const { maintenanceMode, registrationsOpen, listLimit, users, catchLogs, navigationRoutes, stats, flash } = props;
 
     const breadcrumbs: BreadcrumbItem[] = [
         {
@@ -270,7 +271,7 @@ export default function AdminIndex() {
                 <Card className="border-slate-200/70 dark:border-slate-800">
                     <CardHeader>
                         <CardTitle className="text-xl">Users</CardTitle>
-                        <CardDescription>All account data except passwords and remember tokens.</CardDescription>
+                        <CardDescription>Latest {Math.min(users.length, listLimit)} accounts, excluding passwords and remember tokens.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {users.map((user) => (
@@ -315,7 +316,7 @@ export default function AdminIndex() {
                 <Card className="border-slate-200/70 dark:border-slate-800">
                     <CardHeader>
                         <CardTitle className="text-xl">Catch pins</CardTitle>
-                        <CardDescription>Moderate fake spots quickly without exposing passwords or secrets.</CardDescription>
+                        <CardDescription>Latest {Math.min(catchLogs.length, listLimit)} catch pins for moderation.</CardDescription>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                             <Button type="button" variant="outline" onClick={() => setSelectedCatchIds(allCatchIds)}>
                                 Select all
@@ -374,7 +375,7 @@ export default function AdminIndex() {
                 <Card className="border-slate-200/70 dark:border-slate-800">
                     <CardHeader>
                         <CardTitle className="text-xl">Navigation routes</CardTitle>
-                        <CardDescription>Inspect saved route metadata and points, then remove bad or fake paths if needed.</CardDescription>
+                        <CardDescription>Latest {Math.min(navigationRoutes.length, listLimit)} saved routes for moderation.</CardDescription>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                             <Button type="button" variant="outline" onClick={() => setSelectedRouteIds(allRouteIds)}>
                                 Select all

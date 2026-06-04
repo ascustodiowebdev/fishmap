@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\DB;
 
 class NavigationRouteController extends Controller
 {
+    private const MAX_ROUTE_POINTS = 2000;
+
     public function store(Request $request): RedirectResponse
     {
         $validated = $this->validateRouteMeta($request, true);
@@ -118,7 +120,7 @@ class NavigationRouteController extends Controller
         if ($includePoints) {
             $rules = [
                 ...$rules,
-                'points' => ['required', 'array', 'min:2'],
+                'points' => ['required', 'array', 'min:2', 'max:'.self::MAX_ROUTE_POINTS],
                 'points.*.latitude' => ['required', 'numeric', 'between:-90,90'],
                 'points.*.longitude' => ['required', 'numeric', 'between:-180,180'],
                 'points.*.recorded_at' => ['required', 'date'],
@@ -126,7 +128,7 @@ class NavigationRouteController extends Controller
         } else {
             $rules = [
                 ...$rules,
-                'points' => ['sometimes', 'array', 'min:2'],
+                'points' => ['sometimes', 'array', 'min:2', 'max:'.self::MAX_ROUTE_POINTS],
                 'points.*.latitude' => ['required_with:points', 'numeric', 'between:-90,90'],
                 'points.*.longitude' => ['required_with:points', 'numeric', 'between:-180,180'],
                 'points.*.recorded_at' => ['required_with:points', 'date'],
