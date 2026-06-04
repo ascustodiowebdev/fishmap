@@ -6,6 +6,9 @@ const config: CapacitorConfig = {
   appId: 'com.ascustodiowebdev.fishmap',
   appName: 'Fishmap',
   webDir: 'public',
+  android: {
+    useLegacyBridge: true
+  },
   server: serverUrl
     ? {
         url: serverUrl,

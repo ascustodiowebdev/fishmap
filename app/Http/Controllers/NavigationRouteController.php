@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 class NavigationRouteController extends Controller
 {
-    private const MAX_ROUTE_POINTS = 2000;
+    private const MAX_ROUTE_POINTS = 6000;
 
     public function store(Request $request): RedirectResponse
     {

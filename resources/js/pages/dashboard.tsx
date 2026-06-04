@@ -52,8 +52,12 @@ interface MarineConditionsPayload {
 
 const inputClassName =
     'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-teal-400 dark:focus:ring-teal-900/40';
+const MIN_ROUTE_POINT_INTERVAL_MS = 900;
+const MIN_ROUTE_POINT_DISTANCE_METERS = 3;
+const MAX_REASONABLE_ROUTE_SPEED_KMH = 220;
+const MAX_ROUTE_ACCURACY_FOR_MOVING_METERS = 120;
 
-export default function Dashboard({ catchLogs, navigationRoutes, stats }: DashboardProps) {
+export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProps) {
     const { flash, auth } = usePage<SharedData>().props;
     const { t } = useTranslator();
     const canRecordRoutes = Boolean(auth.user);
@@ -342,7 +346,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                     fetchedAt: Date.now(),
                 };
             })
-            .catch((error: unknown) => {
+            .catch(() => {
                 setMarineConditionsError(t('common.error'));
             })
             .finally(() => {
@@ -1099,11 +1103,13 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                 const elapsedMilliseconds = Math.max(new Date(nextRecordedAt).getTime() - new Date(latestPoint.recorded_at).getTime(), 1);
                 const distanceMeters = calculateDistanceMeters([latestPoint.latitude, latestPoint.longitude], position);
                 const speedKmh = (distanceMeters / elapsedMilliseconds) * 3600;
-                const isLikelySpike = speedKmh > 120 || (distanceMeters > 120 && elapsedMilliseconds < 4000);
-                const isLikelyNoise = distanceMeters < 4 && elapsedMilliseconds < 5000;
-                const accuracyTooWeakForMove = typeof accuracy === 'number' && accuracy > 60 && distanceMeters > 20;
+                const isTooSoonForDenseTrack = elapsedMilliseconds < MIN_ROUTE_POINT_INTERVAL_MS && distanceMeters < 50;
+                const isLikelySpike = speedKmh > MAX_REASONABLE_ROUTE_SPEED_KMH || (distanceMeters > 300 && elapsedMilliseconds < 3000);
+                const isLikelyStationaryNoise = distanceMeters < MIN_ROUTE_POINT_DISTANCE_METERS && elapsedMilliseconds < 10000;
+                const accuracyTooWeakForMove =
+                    typeof accuracy === 'number' && accuracy > MAX_ROUTE_ACCURACY_FOR_MOVING_METERS && distanceMeters > 50;
 
-                if (isLikelySpike || isLikelyNoise || accuracyTooWeakForMove) {
+                if (isTooSoonForDenseTrack || isLikelySpike || isLikelyStationaryNoise || accuracyTooWeakForMove) {
                     return currentPoints;
                 }
             }
@@ -1357,7 +1363,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, stats }: Dashbo
                         onDeleteRoute={openRouteDeleteDialog}
                         onStartRouteGuidance={requestRouteGuidance}
                         canRecordRoutes={canRecordRoutes}
-                        keepTrackingInBackground={isRecordingRoute}
+                        keepTrackingInBackground={isRecordingRoute || isGuidanceActive || isFollowModeActive}
                         activeGuidanceRouteId={guidedRouteId}
                         guidanceNearestPoint={guidanceMetrics?.nearestPoint ?? null}
                         isGuidanceActive={isGuidanceActive}

@@ -1,6 +1,8 @@
 import { useTranslator } from '@/lib/i18n';
 import { type CatchLog, type MapBounds, type MapFocusRequest, type NavigationRoute } from '@/types';
 import { App as CapacitorApp } from '@capacitor/app';
+import { BackgroundGeolocation, type Location as BackgroundLocation } from '@capgo/background-geolocation';
+import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -78,9 +80,12 @@ type PositionCoordsLike = {
 
 const SPEED_NOISE_FLOOR_KMH = 1.8;
 const MIN_MOVEMENT_FOR_SPEED_METERS = 2;
-const MAX_ACCURACY_FOR_SPEED_METERS = 25;
-const MAX_TRACK_SPIKE_SPEED_KMH = 120;
-const MAX_TRACK_SPIKE_DISTANCE_METERS = 120;
+const MAX_ACCURACY_FOR_DERIVED_SPEED_METERS = 80;
+const MAX_TRACK_SPIKE_SPEED_KMH = 220;
+const MAX_TRACK_SPIKE_DISTANCE_METERS = 300;
+const RECENT_SPEED_HOLD_MS = 3500;
+const ACTIVE_TRACKING_INTERVAL_MS = 1000;
+const PASSIVE_TRACKING_INTERVAL_MS = 3000;
 const parseCoordinate = (value: string | number | null | undefined): number => {
     if (typeof value === 'number') {
         return value;
@@ -142,6 +147,7 @@ export function CatchMap({
     const currentPositionHandlerRef = useRef(onCurrentPositionChange);
     const currentSpeedHandlerRef = useRef(onCurrentSpeedChange);
     const lastSpeedSampleRef = useRef<{ position: [number, number]; timestamp: number } | null>(null);
+    const lastReportedSpeedRef = useRef<{ speedKmh: number; timestamp: number } | null>(null);
 
     useEffect(() => {
         currentPositionHandlerRef.current = onCurrentPositionChange;
@@ -150,6 +156,21 @@ export function CatchMap({
     useEffect(() => {
         currentSpeedHandlerRef.current = onCurrentSpeedChange;
     }, [onCurrentSpeedChange]);
+
+    useEffect(() => {
+        const shouldKeepScreenAwake = keepTrackingInBackground || isGuidanceActive;
+
+        if (!shouldKeepScreenAwake) {
+            void KeepAwake.allowSleep().catch(() => undefined);
+            return;
+        }
+
+        void KeepAwake.keepAwake().catch(() => undefined);
+
+        return () => {
+            void KeepAwake.allowSleep().catch(() => undefined);
+        };
+    }, [isGuidanceActive, keepTrackingInBackground]);
 
     const catchPoints = catchLogs
         .filter((catchLog) => catchLog.latitude && catchLog.longitude)
@@ -163,10 +184,12 @@ export function CatchMap({
     useEffect(() => {
         let webWatchId: number | null = null;
         let nativeWatchId: string | null = null;
+        let backgroundWatchActive = false;
         let cancelled = false;
         let isAppActive = true;
+        const isActiveTrackingMode = keepTrackingInBackground || isGuidanceActive;
 
-        const shouldTrack = () => !cancelled && (isAppActive || keepTrackingInBackground);
+        const shouldTrack = () => !cancelled && (isAppActive || isActiveTrackingMode);
 
         const clearTracking = () => {
             if (webWatchId !== null) {
@@ -179,16 +202,21 @@ export function CatchMap({
                 nativeWatchId = null;
             }
 
+            if (backgroundWatchActive) {
+                void BackgroundGeolocation.stop();
+                backgroundWatchActive = false;
+            }
+
             currentSpeedHandlerRef.current(null);
         };
 
-        const applyPosition = (coords: PositionCoordsLike) => {
+        const applyPosition = (coords: PositionCoordsLike, positionTimestamp?: number | null) => {
             if (!shouldTrack()) {
                 return;
             }
 
             const nextPosition: [number, number] = [coords.latitude, coords.longitude];
-            const timestamp = Date.now();
+            const timestamp = typeof positionTimestamp === 'number' && Number.isFinite(positionTimestamp) ? positionTimestamp : Date.now();
             let derivedSpeedKmh: number | null = null;
             const previousSpeedSample = lastSpeedSampleRef.current;
             const recordedAt = new Date(timestamp).toISOString();
@@ -205,10 +233,12 @@ export function CatchMap({
                         return;
                     }
 
-                    if (distanceMeters < MIN_MOVEMENT_FOR_SPEED_METERS || coords.accuracy > MAX_ACCURACY_FOR_SPEED_METERS) {
+                    if (distanceMeters < MIN_MOVEMENT_FOR_SPEED_METERS) {
                         derivedSpeedKmh = 0;
-                    } else {
+                    } else if (coords.accuracy <= MAX_ACCURACY_FOR_DERIVED_SPEED_METERS) {
                         derivedSpeedKmh = nextSpeedKmh;
+                    } else {
+                        derivedSpeedKmh = null;
                     }
                 }
             }
@@ -225,8 +255,16 @@ export function CatchMap({
             const nativeSpeedKmh =
                 typeof coords.speed === 'number' && Number.isFinite(coords.speed) && coords.speed > 0.15 ? Math.max(coords.speed * 3.6, 0) : null;
             const rawSpeedKmh = nativeSpeedKmh ?? derivedSpeedKmh;
-            const smoothedSpeedKmh =
-                rawSpeedKmh !== null && (rawSpeedKmh < SPEED_NOISE_FLOOR_KMH || coords.accuracy > MAX_ACCURACY_FOR_SPEED_METERS) ? 0 : rawSpeedKmh;
+            let smoothedSpeedKmh = rawSpeedKmh !== null && rawSpeedKmh < SPEED_NOISE_FLOOR_KMH ? 0 : rawSpeedKmh;
+
+            if (smoothedSpeedKmh === null && lastReportedSpeedRef.current && timestamp - lastReportedSpeedRef.current.timestamp <= RECENT_SPEED_HOLD_MS) {
+                smoothedSpeedKmh = lastReportedSpeedRef.current.speedKmh;
+            }
+
+            if (smoothedSpeedKmh !== null) {
+                lastReportedSpeedRef.current = { speedKmh: smoothedSpeedKmh, timestamp };
+            }
+
             currentSpeedHandlerRef.current(smoothedSpeedKmh);
 
             if (!hasAutoCenteredRef.current) {
@@ -236,6 +274,18 @@ export function CatchMap({
                     key: Date.now(),
                 });
             }
+        };
+
+        const applyBackgroundLocation = (location: BackgroundLocation) => {
+            applyPosition(
+                {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    accuracy: location.accuracy,
+                    speed: location.speed,
+                },
+                location.time,
+            );
         };
 
         const startWebTracking = () => {
@@ -257,12 +307,12 @@ export function CatchMap({
 
             const requestPosition = (enableHighAccuracy = true) => {
                 navigator.geolocation.getCurrentPosition(
-                    ({ coords }) => applyPosition(coords),
+                    ({ coords, timestamp }) => applyPosition(coords, timestamp),
                     () => undefined,
                     {
                         enableHighAccuracy,
-                        maximumAge: isGuidanceActive ? 1000 : 5000,
-                        timeout: isGuidanceActive ? 8000 : 12000,
+                        maximumAge: isActiveTrackingMode ? 0 : 2000,
+                        timeout: isActiveTrackingMode ? 8000 : 12000,
                     },
                 );
             };
@@ -270,8 +320,8 @@ export function CatchMap({
             requestPosition();
 
             webWatchId = navigator.geolocation.watchPosition(
-                ({ coords }) => {
-                    applyPosition(coords);
+                ({ coords, timestamp }) => {
+                    applyPosition(coords, timestamp);
                 },
                 (error) => {
                     if (error.code === error.TIMEOUT || error.code === error.POSITION_UNAVAILABLE) {
@@ -280,10 +330,44 @@ export function CatchMap({
                 },
                 {
                     enableHighAccuracy: true,
-                    maximumAge: 3000,
-                    timeout: 12000,
+                    maximumAge: isActiveTrackingMode ? 0 : 2000,
+                    timeout: isActiveTrackingMode ? 8000 : 12000,
                 },
             );
+        };
+
+        const startNativeBackgroundTracking = async () => {
+            if (!shouldTrack()) {
+                return;
+            }
+
+            try {
+                await BackgroundGeolocation.start(
+                    {
+                        backgroundTitle: 'Fishmap navigation',
+                        backgroundMessage: 'Fishmap is recording your position for navigation.',
+                        requestPermissions: true,
+                        stale: false,
+                        distanceFilter: 0,
+                    },
+                    (position, error) => {
+                        if (error) {
+                            currentPositionHandlerRef.current(null);
+                            currentSpeedHandlerRef.current(null);
+                            return;
+                        }
+
+                        if (!shouldTrack() || !position) {
+                            return;
+                        }
+
+                        applyBackgroundLocation(position);
+                    },
+                );
+                backgroundWatchActive = true;
+            } catch {
+                startWebTracking();
+            }
         };
 
         const startNativeTracking = async () => {
@@ -302,26 +386,28 @@ export function CatchMap({
 
                 const current = await Geolocation.getCurrentPosition({
                     enableHighAccuracy: true,
-                    timeout: isGuidanceActive ? 8000 : 12000,
-                    maximumAge: isGuidanceActive ? 1000 : 5000,
+                    timeout: isActiveTrackingMode ? 8000 : 12000,
+                    maximumAge: isActiveTrackingMode ? 0 : 2000,
                 });
 
                 if (!cancelled) {
-                    applyPosition(current.coords);
+                    applyPosition(current.coords, current.timestamp);
                 }
 
                 nativeWatchId = await Geolocation.watchPosition(
                     {
                         enableHighAccuracy: true,
-                        timeout: 12000,
-                        maximumAge: 3000,
+                        timeout: isActiveTrackingMode ? ACTIVE_TRACKING_INTERVAL_MS : 10000,
+                        maximumAge: isActiveTrackingMode ? 0 : 2000,
+                        interval: isActiveTrackingMode ? ACTIVE_TRACKING_INTERVAL_MS : PASSIVE_TRACKING_INTERVAL_MS,
+                        minimumUpdateInterval: isActiveTrackingMode ? ACTIVE_TRACKING_INTERVAL_MS : PASSIVE_TRACKING_INTERVAL_MS,
                     },
                     (position) => {
                         if (!shouldTrack() || !position) {
                             return;
                         }
 
-                        applyPosition(position.coords);
+                        applyPosition(position.coords, position.timestamp);
                     },
                 );
 
@@ -341,7 +427,9 @@ export function CatchMap({
                 return;
             }
 
-            if (Capacitor.isNativePlatform()) {
+            if (Capacitor.isNativePlatform() && isActiveTrackingMode) {
+                void startNativeBackgroundTracking();
+            } else if (Capacitor.isNativePlatform()) {
                 void startNativeTracking();
             } else {
                 startWebTracking();
@@ -355,7 +443,7 @@ export function CatchMap({
                   isAppActive = isActive;
 
                   if (!isAppActive) {
-                      if (!keepTrackingInBackground) {
+                      if (!isActiveTrackingMode) {
                           clearTracking();
                       }
                       return;
@@ -369,6 +457,7 @@ export function CatchMap({
             cancelled = true;
             clearTracking();
             lastSpeedSampleRef.current = null;
+            lastReportedSpeedRef.current = null;
 
             if (appStateListenerPromise) {
                 void appStateListenerPromise.then((listener) => listener.remove());
