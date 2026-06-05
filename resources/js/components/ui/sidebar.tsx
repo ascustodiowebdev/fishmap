@@ -83,8 +83,18 @@ const SidebarProvider = React.forwardRef<
             }
         };
 
+        const handleMobileSidebarOpen = () => {
+            if (isMobile) {
+                setOpenMobile(true);
+            }
+        };
+
         window.addEventListener('mobile-navigation', handleMobileNavigation);
-        return () => window.removeEventListener('mobile-navigation', handleMobileNavigation);
+        window.addEventListener('mobile-sidebar-open', handleMobileSidebarOpen);
+        return () => {
+            window.removeEventListener('mobile-navigation', handleMobileNavigation);
+            window.removeEventListener('mobile-sidebar-open', handleMobileSidebarOpen);
+        };
     }, [isMobile, setOpenMobile]);
 
     // Adds a keyboard shortcut to toggle the sidebar.

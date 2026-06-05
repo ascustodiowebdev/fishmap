@@ -2,13 +2,14 @@
 import AppWordmark from '@/components/app-wordmark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { SidebarTrigger } from '@/components/ui/sidebar';
 import { useTranslator } from '@/lib/i18n';
 import { type BreadcrumbItem, type CatchLog, type MapFocusRequest, type NavigationRoute, type SharedData } from '@/types';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, ChevronDown, ChevronUp, Crosshair, Fish, Globe, LoaderCircle, MapPinned, Menu, Navigation, Plus, Wind, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, ChevronDown, ChevronUp, Crosshair, Fish, Globe, Layers3, LoaderCircle, MapPinned, Navigation, Plus, Wind, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -224,6 +225,48 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
             setSimulatedPosition(null);
         }
     }, [canSimulateRoutes, routeSimulationEnabled]);
+
+    useEffect(() => {
+        let startX: number | null = null;
+        let startY: number | null = null;
+
+        const onTouchStart = (event: TouchEvent) => {
+            const touch = event.touches[0];
+            if (!touch || touch.clientX > 24) {
+                startX = null;
+                startY = null;
+                return;
+            }
+
+            startX = touch.clientX;
+            startY = touch.clientY;
+        };
+
+        const onTouchEnd = (event: TouchEvent) => {
+            if (startX === null || startY === null) {
+                return;
+            }
+
+            const touch = event.changedTouches[0];
+            const deltaX = touch.clientX - startX;
+            const deltaY = Math.abs(touch.clientY - startY);
+
+            startX = null;
+            startY = null;
+
+            if (deltaX > 70 && deltaY < 60) {
+                window.dispatchEvent(new CustomEvent('mobile-sidebar-open'));
+            }
+        };
+
+        window.addEventListener('touchstart', onTouchStart, { passive: true });
+        window.addEventListener('touchend', onTouchEnd, { passive: true });
+
+        return () => {
+            window.removeEventListener('touchstart', onTouchStart);
+            window.removeEventListener('touchend', onTouchEnd);
+        };
+    }, []);
 
     useEffect(() => {
         if (!isGuidanceActive) {
@@ -1299,6 +1342,8 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
 
     const fishSpotCount = catchLogs.length.toString();
     const routeCount = navigationRoutes.length.toString();
+    const upcomingTideEvent = getUpcomingTideEvent(marineConditions?.tide);
+    const displayedTideState = upcomingTideEvent?.type === 'high' ? 'rising' : upcomingTideEvent?.type === 'low' ? 'falling' : marineConditions?.tide.state;
 
     return (
         <AppLayout breadcrumbs={breadcrumbs} hideHeader>
@@ -1382,13 +1427,15 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                             isInitialMapLoading ? 'opacity-0' : 'opacity-100'
                         }`}
                     >
-                        <div className="pointer-events-auto flex items-center justify-start md:hidden">
+                        <div className="pointer-events-auto flex items-center gap-2 md:hidden">
+                            <SidebarTrigger className="flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/88 text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur" />
                             <button
                                 type="button"
                                 onClick={() => setMobileHudOpen((current) => !current)}
                                 className="flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/88 text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur"
+                                title={mobileHudOpen ? t('common.close') : t('dashboard.map_tools')}
                             >
-                                {mobileHudOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+                                {mobileHudOpen ? <X className="size-5" /> : <Layers3 className="size-5" />}
                             </button>
                         </div>
 
@@ -1517,8 +1564,8 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                                 <div className="col-span-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2">
                                                     <p className="font-medium text-teal-800">{t('dashboard.next_tide')}</p>
                                                     <p className="mt-1 text-sm font-semibold text-teal-950">
-                                                        {formatTideEventLabel(marineConditions?.tide.next_event_type, t)} ·{' '}
-                                                        {formatTideTimeAndHeight(marineConditions?.tide.next_event_at, marineConditions?.tide.next_event_m)}
+                                                        {formatTideEventLabel(upcomingTideEvent?.type, t)} ·{' '}
+                                                        {formatTideTimeAndHeight(upcomingTideEvent?.at, upcomingTideEvent?.height)}
                                                     </p>
                                                 </div>
                                                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -1547,7 +1594,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
 
                                             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                                                 <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-medium text-cyan-900">
-                                                    {t('dashboard.tide_state')}: {formatTideState(marineConditions?.tide.state, t)}
+                                                    {t('dashboard.tide_state')}: {formatTideState(displayedTideState, t)}
                                                 </span>
                                                 <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-900">
                                                     {t('dashboard.tide_coefficient')}: {marineConditions?.tide.coefficient ?? '--'}
@@ -1573,7 +1620,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                     </div>
 
                     {guidedRoute ? (
-                        <div className="pointer-events-none absolute top-4 right-3 left-16 z-[515] md:inset-x-auto md:right-5 md:bottom-24 md:top-auto md:left-auto">
+                        <div className="pointer-events-none absolute top-16 right-3 left-3 z-[515] md:inset-x-auto md:right-5 md:bottom-24 md:top-auto md:left-auto">
                             <div className="pointer-events-auto flex min-w-0 items-center gap-2 rounded-full border border-white/70 bg-white/92 px-2.5 py-2 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur md:gap-3 md:px-3 dark:border-slate-700 dark:bg-slate-900/92">
                                 <div className="relative flex size-10 shrink-0 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner md:size-11 dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
                                     <div className="absolute inset-1 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
@@ -2689,6 +2736,34 @@ function formatTideTimeAndHeight(timeIso: string | null | undefined, heightM: nu
     const height = heightM !== null && heightM !== undefined && Number.isFinite(heightM) ? ` (${heightM.toFixed(2)} m)` : '';
 
     return `${time}${height}`;
+}
+
+function getUpcomingTideEvent(tide: MarineConditionsPayload['tide'] | null | undefined) {
+    if (!tide) {
+        return null;
+    }
+
+    const candidates = [
+        { type: tide.next_event_type ?? null, at: tide.next_event_at ?? null, height: tide.next_event_m ?? null },
+        { type: 'high' as const, at: tide.next_high_at, height: tide.next_high_m },
+        { type: 'low' as const, at: tide.next_low_at, height: tide.next_low_m },
+    ]
+        .filter((event): event is { type: 'high' | 'low'; at: string; height: number | null | undefined } => {
+            if (event.type !== 'high' && event.type !== 'low') {
+                return false;
+            }
+
+            if (!event.at) {
+                return false;
+            }
+
+            const timestamp = new Date(event.at).getTime();
+
+            return Number.isFinite(timestamp) && timestamp > Date.now() - 2 * 60 * 1000;
+        })
+        .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+    return candidates[0] ?? null;
 }
 
 function formatTideState(state: 'rising' | 'falling' | 'slack' | null | undefined, t: (key: string) => string) {

@@ -22,7 +22,7 @@ class MarineConditionsController extends Controller
         $latitude = round((float) $validated['latitude'], 3);
         $longitude = round((float) $validated['longitude'], 3);
         $timezone = 'Europe/Lisbon';
-        $cacheKey = sprintf('marine-conditions:%s:%s', $latitude, $longitude);
+        $cacheKey = sprintf('marine-conditions:v2:%s:%s', $latitude, $longitude);
 
         $payload = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($latitude, $longitude, $timezone) {
             return $this->fetchMarineConditions($latitude, $longitude, $timezone);
@@ -100,8 +100,7 @@ class MarineConditionsController extends Controller
      */
     protected function fetchOfficialTide(float $latitude, float $longitude, string $timezone): ?array
     {
-        return $this->fetchTides4FishingTide($latitude, $longitude, $timezone)
-            ?? $this->fetchTabuaDeMaresTide($latitude, $longitude, $timezone);
+        return $this->fetchTides4FishingTide($latitude, $longitude, $timezone);
     }
 
     /**
