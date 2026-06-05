@@ -2732,7 +2732,7 @@ function formatTideTimeAndHeight(timeIso: string | null | undefined, heightM: nu
         return '--';
     }
 
-    const time = parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const time = parsed.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', hour12: false });
     const height = heightM !== null && heightM !== undefined && Number.isFinite(heightM) ? ` (${heightM.toFixed(2)} m)` : '';
 
     return `${time}${height}`;

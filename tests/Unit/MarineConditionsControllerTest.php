@@ -40,6 +40,37 @@ class MarineConditionsControllerTest extends TestCase
         $this->assertSame(0.8, $cutoff);
     }
 
+    public function test_it_extracts_today_portuguese_tide_summary(): void
+    {
+        CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-06-05 11:15:00', 'Europe/Lisbon'));
+
+        $controller = new MarineConditionsController();
+        $events = $this->invokeProtected($controller, 'extractPortugueseTodayTideEvents', [
+            'A primeira preia-mar foi às 6:33 e a seguinte preia-mar será às 18:47. A única baixa-mar será às 12:07.',
+            'Europe/Lisbon',
+        ]);
+        $selection = $this->invokeProtected($controller, 'selectUpcomingTideEvents', [
+            $events,
+            CarbonImmutable::parse('2026-06-05 11:15:00', 'Europe/Lisbon'),
+        ]);
+
+        CarbonImmutable::setTestNow();
+
+        $this->assertSame('falling', $selection['state']);
+        $this->assertSame('low', $selection['next_event']['type']);
+        $this->assertSame('12:07', $selection['next_event']['at']->format('H:i'));
+        $this->assertSame('18:47', $selection['next_high']['at']->format('H:i'));
+    }
+
+    public function test_it_rejects_stale_fallback_tide_events(): void
+    {
+        $controller = new MarineConditionsController();
+        $now = CarbonImmutable::parse('2026-06-05 11:15:00', 'Europe/Lisbon');
+        $event = ['type' => 'low', 'height' => 1.2, 'at' => $now->addDays(5)->setTime(4, 46)];
+
+        $this->assertFalse($this->invokeProtected($controller, 'hasUpcomingTideWithinWindow', [$event, $now]));
+    }
+
     /**
      * @param  array<int, mixed>  $arguments
      */
