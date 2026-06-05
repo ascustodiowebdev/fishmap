@@ -22,7 +22,7 @@ class MarineConditionsController extends Controller
         $latitude = round((float) $validated['latitude'], 3);
         $longitude = round((float) $validated['longitude'], 3);
         $timezone = 'Europe/Lisbon';
-        $cacheKey = sprintf('marine-conditions:v3:%s:%s', $latitude, $longitude);
+        $cacheKey = sprintf('marine-conditions:v4:%s:%s', $latitude, $longitude);
 
         $payload = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($latitude, $longitude, $timezone) {
             return $this->fetchMarineConditions($latitude, $longitude, $timezone);
@@ -308,6 +308,107 @@ class MarineConditionsController extends Controller
     }
 
     /**
+     * @return array<int, array{type:string,height:?float,at:CarbonImmutable}>
+     */
+    protected function extractTabuaMonthlyTideEvents(string $html, string $timezone): array
+    {
+        $normalized = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $normalized = preg_replace('/\s+/u', ' ', $normalized ?? '') ?? '';
+
+        if ($normalized === '') {
+            return [];
+        }
+
+        $now = CarbonImmutable::now($timezone);
+        $events = [];
+        $seen = [];
+
+        preg_match_all('/(?:^|\s)(\d{1,2})\s+(?:Seg|Ter|Qua|Qui|Sex|Sáb|Dom)\s+(?:(?:\d{1,2}:\d{2})\s+(?:\d{1,2}:\d{2})\s+)?((?:\d{1,2}:\d{2}\s+[0-9]+[,.][0-9]+\s*m\s*){1,4})/u', $normalized, $dayMatches, PREG_SET_ORDER);
+
+        foreach ($dayMatches as $dayMatch) {
+            $day = (int) ($dayMatch[1] ?? 0);
+            $row = (string) ($dayMatch[2] ?? '');
+
+            if ($day < 1 || $row === '') {
+                continue;
+            }
+
+            try {
+                $date = CarbonImmutable::create($now->year, $now->month, $day, 0, 0, 0, $timezone);
+            } catch (Throwable) {
+                continue;
+            }
+
+            if (! preg_match_all('/(\d{1,2}:\d{2})\s+([0-9]+[,.][0-9]+)\s*m/u', $row, $tideMatches, PREG_SET_ORDER)) {
+                continue;
+            }
+
+            $rowEvents = [];
+            foreach ($tideMatches as $tideMatch) {
+                $height = $this->toNullableFloat(str_replace(',', '.', (string) ($tideMatch[2] ?? '')));
+                if ($height === null) {
+                    continue;
+                }
+
+                $rowEvents[] = [
+                    'time' => (string) ($tideMatch[1] ?? ''),
+                    'height' => $height,
+                ];
+            }
+
+            $heightCutoff = $this->lowTideHeightCutoff($rowEvents);
+            foreach ($rowEvents as $rowEvent) {
+                $event = $this->buildTideEvent(
+                    $heightCutoff !== null && $rowEvent['height'] <= $heightCutoff ? 'low' : 'high',
+                    (string) $rowEvent['time'],
+                    $rowEvent['height'],
+                    $date
+                );
+
+                if ($event === null) {
+                    continue;
+                }
+
+                $eventKey = $event['at']->toIso8601String().'|'.$event['type'];
+                if (isset($seen[$eventKey])) {
+                    continue;
+                }
+                $seen[$eventKey] = true;
+                $events[] = $event;
+            }
+        }
+
+        usort($events, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
+
+        return $events;
+    }
+
+    /**
+     * @param  array<int, array{type:string,height:?float,at:CarbonImmutable}>  $primary
+     * @param  array<int, array{type:string,height:?float,at:CarbonImmutable}>  $secondary
+     * @return array<int, array{type:string,height:?float,at:CarbonImmutable}>
+     */
+    protected function mergeTideEvents(array $primary, array $secondary): array
+    {
+        $merged = [];
+        foreach (array_merge($primary, $secondary) as $event) {
+            if (! isset($event['type'], $event['at']) || ! $event['at'] instanceof CarbonImmutable) {
+                continue;
+            }
+
+            $eventKey = $event['at']->toIso8601String().'|'.$event['type'];
+            if (! isset($merged[$eventKey]) || ($merged[$eventKey]['height'] === null && ($event['height'] ?? null) !== null)) {
+                $merged[$eventKey] = $event;
+            }
+        }
+
+        $events = array_values($merged);
+        usort($events, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
+
+        return $events;
+    }
+
+    /**
      * @return array{type:string,height:?float,at:CarbonImmutable}|null
      */
     protected function buildTideEvent(string $type, string $time, ?float $height, CarbonImmutable $day): ?array
@@ -391,7 +492,8 @@ class MarineConditionsController extends Controller
 
         $now = CarbonImmutable::now($timezone);
         $todayEvents = $this->extractPortugueseTodayTideEvents($html, $timezone);
-        $selection = $this->selectUpcomingTideEvents($todayEvents, $now);
+        $monthlyEvents = $this->extractTabuaMonthlyTideEvents($html, $timezone);
+        $selection = $this->selectUpcomingTideEvents($this->mergeTideEvents($todayEvents, $monthlyEvents), $now);
 
         if ($this->hasUpcomingTideWithinWindow($selection['next_event'], $now)) {
             return $this->formatOfficialTideSelection($html, $selection, 'tabuademares');

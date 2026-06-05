@@ -71,6 +71,29 @@ class MarineConditionsControllerTest extends TestCase
         $this->assertFalse($this->invokeProtected($controller, 'hasUpcomingTideWithinWindow', [$event, $now]));
     }
 
+    public function test_it_keeps_next_low_after_todays_low_has_passed(): void
+    {
+        CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-06-05 14:00:00', 'Europe/Lisbon'));
+
+        $controller = new MarineConditionsController();
+        $events = $this->invokeProtected($controller, 'extractTabuaMonthlyTideEvents', [
+            '5 Sex 6:12 20:47 6:33 2,7 m 12:07 1,2 m 18:47 2,9 m 53 medio 6 Seg 6:11 20:48 0:43 1,2 m 7:16 2,6 m 12:54 1,3 m 19:31 2,8 m 50 medio',
+            'Europe/Lisbon',
+        ]);
+        $selection = $this->invokeProtected($controller, 'selectUpcomingTideEvents', [
+            $events,
+            CarbonImmutable::parse('2026-06-05 14:00:00', 'Europe/Lisbon'),
+        ]);
+
+        CarbonImmutable::setTestNow();
+
+        $this->assertSame('rising', $selection['state']);
+        $this->assertSame('high', $selection['next_event']['type']);
+        $this->assertSame('18:47', $selection['next_event']['at']->format('H:i'));
+        $this->assertSame('2026-06-06 00:43', $selection['next_low']['at']->format('Y-m-d H:i'));
+        $this->assertSame(1.2, $selection['next_low']['height']);
+    }
+
     /**
      * @param  array<int, mixed>  $arguments
      */
