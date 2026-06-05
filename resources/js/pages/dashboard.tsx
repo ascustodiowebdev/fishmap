@@ -41,6 +41,9 @@ interface MarineConditionsPayload {
     };
     tide: {
         state: 'rising' | 'falling' | 'slack' | null;
+        next_event_type?: 'high' | 'low' | null;
+        next_event_at?: string | null;
+        next_event_m?: number | null;
         next_high_at: string | null;
         next_low_at: string | null;
         next_high_m: number | null;
@@ -113,9 +116,9 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
     const lastMarineFetchRef = useRef<{ latitude: number; longitude: number; fetchedAt: number } | null>(null);
     const lastMarineRequestAtRef = useRef<number>(0);
     const marineRequestInFlightRef = useRef(false);
-    const [statsCollapsed, setStatsCollapsed] = useState(false);
-    const [routeCardCollapsed, setRouteCardCollapsed] = useState(false);
-    const [marineCardCollapsed, setMarineCardCollapsed] = useState(false);
+    const [statsCollapsed, setStatsCollapsed] = useState(true);
+    const [routeCardCollapsed, setRouteCardCollapsed] = useState(true);
+    const [marineCardCollapsed, setMarineCardCollapsed] = useState(true);
     const [routeEditModeRouteId, setRouteEditModeRouteId] = useState<number | null>(null);
     const [routeEditDraftPoints, setRouteEditDraftPoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
     const [routeEditSelection, setRouteEditSelection] = useState<[number, number] | null>(null);
@@ -205,14 +208,15 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
             return 0;
         }
 
-        const effectiveHeading = deviceHeadingDeg ?? currentHeadingDeg;
+        const effectiveHeading =
+            (displayedSpeedKmh ?? 0) >= 4 ? currentHeadingDeg ?? deviceHeadingDeg : deviceHeadingDeg ?? currentHeadingDeg;
 
         if (effectiveHeading === null) {
             return guidanceMetrics.rejoinBearing;
         }
 
         return ((guidanceMetrics.rejoinBearing - effectiveHeading) % 360 + 360) % 360;
-    }, [currentHeadingDeg, deviceHeadingDeg, guidanceMetrics]);
+    }, [currentHeadingDeg, deviceHeadingDeg, displayedSpeedKmh, guidanceMetrics]);
 
     useEffect(() => {
         if (!canSimulateRoutes && routeSimulationEnabled) {
@@ -242,15 +246,14 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                 const delta = shortestCircularDiff(previous, heading);
                 const absoluteDelta = Math.abs(delta);
 
-                // Ignore tiny compass noise to prevent visible jitter.
-                if (absoluteDelta < 4.8) {
+                if (absoluteDelta < 8) {
                     return previous;
                 }
 
-                const factor = absoluteDelta > 35 ? 0.08 : 0.14;
+                const factor = absoluteDelta > 45 ? 0.06 : 0.1;
                 const next = interpolateCircularDegrees(previous, heading, factor);
 
-                return limitCircularStep(previous, next, 6.5);
+                return limitCircularStep(previous, next, 3.5);
             });
         };
 
@@ -1298,14 +1301,14 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
     const routeCount = navigationRoutes.length.toString();
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={breadcrumbs} hideHeader>
             <Head title="Fishmap">
                 <link rel="preconnect" href="https://fonts.bunny.net" />
                 <link href="https://fonts.bunny.net/css?family=manrope:400,500,600,700" rel="stylesheet" />
             </Head>
 
-            <div className="flex min-h-[calc(100svh-4rem)] flex-col p-0 md:h-[calc(100vh-5rem)] md:p-4">
-                <section className="relative min-h-0 flex-1 overflow-hidden rounded-none bg-[#081217] md:rounded-[2rem]">
+            <div className="flex min-h-svh flex-col p-0 md:h-screen">
+                <section className="relative min-h-0 flex-1 overflow-hidden rounded-none bg-[#081217]">
                     <CatchMap
                         catchLogs={catchLogs}
                         navigationRoutes={navigationRoutes}
@@ -1389,8 +1392,8 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                             </button>
                         </div>
 
-                        <div className={`${mobileHudOpen ? 'flex' : 'hidden'} pointer-events-auto flex-col gap-3 md:flex`}>
-                            <div className="rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+                        <div className={`${mobileHudOpen ? 'flex' : 'hidden'} pointer-events-auto max-h-[calc(100svh-5rem)] flex-col gap-3 overflow-y-auto pr-1 md:flex md:max-h-none md:overflow-visible md:pr-0`}>
+                            <div className="hidden rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur md:block">
                                 <div className="hidden items-center justify-between gap-3 md:flex">
                                     <Link href={route('home')}>
                                         <AppWordmark className="h-7 w-[155px] sm:h-9 sm:w-[190px]" />
@@ -1399,9 +1402,6 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                         {t('app.home')}
                                     </Link>
                                 </div>
-                                <Link href={route('home')} className="md:hidden">
-                                    <AppWordmark className="h-7 w-[155px] sm:h-9 sm:w-[190px]" />
-                                </Link>
                                 <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl">{t('dashboard.live_map')}</h1>
                                 <p className="mt-2 text-sm leading-6 text-slate-600">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
                             </div>
@@ -1514,6 +1514,13 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                     {!marineCardCollapsed ? (
                                         <>
                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                                <div className="col-span-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2">
+                                                    <p className="font-medium text-teal-800">{t('dashboard.next_tide')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-teal-950">
+                                                        {formatTideEventLabel(marineConditions?.tide.next_event_type, t)} ·{' '}
+                                                        {formatTideTimeAndHeight(marineConditions?.tide.next_event_at, marineConditions?.tide.next_event_m)}
+                                                    </p>
+                                                </div>
                                                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                                                     <p className="font-medium text-slate-500">{t('dashboard.wind')}</p>
                                                     <p className="mt-1 text-sm font-semibold text-slate-900">
@@ -1566,14 +1573,14 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                     </div>
 
                     {guidedRoute ? (
-                        <div className="pointer-events-none absolute inset-x-4 bottom-28 z-[515] md:inset-x-auto md:right-5 md:bottom-24">
-                            <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/70 bg-white/92 px-3 py-2 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
-                                <div className="relative flex size-11 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
+                        <div className="pointer-events-none absolute top-4 right-3 left-16 z-[515] md:inset-x-auto md:right-5 md:bottom-24 md:top-auto md:left-auto">
+                            <div className="pointer-events-auto flex min-w-0 items-center gap-2 rounded-full border border-white/70 bg-white/92 px-2.5 py-2 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur md:gap-3 md:px-3 dark:border-slate-700 dark:bg-slate-900/92">
+                                <div className="relative flex size-10 shrink-0 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner md:size-11 dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
                                     <div className="absolute inset-1 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
                                     <ArrowUp className="size-5 transition-transform duration-200" style={{ transform: `rotate(${guidanceArrowRotation}deg)` }} />
                                 </div>
 
-                                <div className="min-w-0">
+                                <div className="min-w-0 flex-1">
                                     <p className="text-[10px] font-semibold tracking-[0.18em] text-teal-700 uppercase">{t('dashboard.route_guidance')}</p>
                                     <p className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{guidedRoute.name}</p>
                                     <p className="text-xs text-slate-600 dark:text-slate-300">
@@ -1582,7 +1589,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                     </p>
                                 </div>
 
-                                <Button type="button" variant="outline" className="h-8 rounded-full px-3 text-xs" onClick={stopRouteGuidance}>
+                                <Button type="button" variant="outline" className="h-8 shrink-0 rounded-full px-3 text-xs" onClick={stopRouteGuidance}>
                                     {t('dashboard.stop_guidance')}
                                 </Button>
                             </div>
@@ -2698,6 +2705,18 @@ function formatTideState(state: 'rising' | 'falling' | 'slack' | null | undefine
     }
 
     return t('dashboard.tide_slack');
+}
+
+function formatTideEventLabel(type: 'high' | 'low' | null | undefined, t: (key: string) => string) {
+    if (type === 'high') {
+        return t('dashboard.tide_high');
+    }
+
+    if (type === 'low') {
+        return t('dashboard.tide_low');
+    }
+
+    return '--';
 }
 
 async function requestDeviceHeadingPermission() {

@@ -119,20 +119,11 @@ class MarineConditionsController extends Controller
 
         $now = CarbonImmutable::now($timezone);
         $events = $this->extractTides4FishingTableEvents($html, $timezone);
+        $selection = $this->selectUpcomingTideEvents($events, $now);
 
-        $nextHigh = null;
-        $nextLow = null;
-        foreach ($events as $event) {
-            if ($event['at']->lessThan($now)) {
-                continue;
-            }
-            if ($event['type'] === 'high' && $nextHigh === null) {
-                $nextHigh = $event;
-            }
-            if ($event['type'] === 'low' && $nextLow === null) {
-                $nextLow = $event;
-            }
-        }
+        $nextHigh = $selection['next_high'];
+        $nextLow = $selection['next_low'];
+        $nextEvent = $selection['next_event'];
 
         if ($nextHigh === null || $nextLow === null) {
             $normalized = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -144,6 +135,8 @@ class MarineConditionsController extends Controller
             if ($nextLow === null) {
                 $nextLow = $fallbackEvents['next_low'];
             }
+            $selection = $this->selectUpcomingTideEvents(array_filter([$nextHigh, $nextLow]), $now);
+            $nextEvent = $selection['next_event'];
         }
 
         if ($nextHigh === null && $nextLow === null) {
@@ -156,13 +149,11 @@ class MarineConditionsController extends Controller
             ? (int) $coefClassMatch[1]
             : (isset($coefTextMatch[1]) ? (int) $coefTextMatch[1] : null);
 
-        $state = null;
-        if ($nextHigh && $nextLow) {
-            $state = $nextHigh['at']->lessThan($nextLow['at']) ? 'rising' : 'falling';
-        }
-
         return [
-            'state' => $state,
+            'state' => $selection['state'],
+            'next_event_type' => $nextEvent['type'] ?? null,
+            'next_event_at' => $nextEvent ? $nextEvent['at']->toIso8601String() : null,
+            'next_event_m' => $nextEvent['height'] ?? null,
             'next_high_at' => $nextHigh ? $nextHigh['at']->toIso8601String() : null,
             'next_low_at' => $nextLow ? $nextLow['at']->toIso8601String() : null,
             'next_high_m' => $nextHigh['height'] ?? null,
@@ -281,6 +272,49 @@ class MarineConditionsController extends Controller
     }
 
     /**
+     * @param  array<int, array{type:string,height:?float,at:CarbonImmutable}>  $events
+     * @return array{next_high:?array{type:string,height:?float,at:CarbonImmutable},next_low:?array{type:string,height:?float,at:CarbonImmutable},next_event:?array{type:string,height:?float,at:CarbonImmutable},state:?string}
+     */
+    protected function selectUpcomingTideEvents(array $events, CarbonImmutable $now): array
+    {
+        $events = array_values(array_filter($events, fn (array $event): bool => isset($event['type'], $event['at']) && $event['at'] instanceof CarbonImmutable));
+        usort($events, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
+
+        $nextHigh = null;
+        $nextLow = null;
+        $nextEvent = null;
+
+        foreach ($events as $event) {
+            if ($event['at']->lessThan($now)) {
+                continue;
+            }
+
+            $nextEvent ??= $event;
+
+            if ($event['type'] === 'high' && $nextHigh === null) {
+                $nextHigh = $event;
+            }
+
+            if ($event['type'] === 'low' && $nextLow === null) {
+                $nextLow = $event;
+            }
+        }
+
+        $state = match ($nextEvent['type'] ?? null) {
+            'high' => 'rising',
+            'low' => 'falling',
+            default => null,
+        };
+
+        return [
+            'next_high' => $nextHigh,
+            'next_low' => $nextLow,
+            'next_event' => $nextEvent,
+            'state' => $state,
+        ];
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     protected function fetchTabuaDeMaresTide(float $latitude, float $longitude, string $timezone): ?array
@@ -297,7 +331,7 @@ class MarineConditionsController extends Controller
         }
 
         $events = [];
-        foreach ($matches as $index => $match) {
+        foreach ($matches as $match) {
             $time = trim((string) Arr::get($match, 1, ''));
             $heightRaw = str_replace(',', '.', (string) Arr::get($match, 2, ''));
             $height = $this->toNullableFloat($heightRaw);
@@ -305,9 +339,7 @@ class MarineConditionsController extends Controller
                 continue;
             }
 
-            // Page alternates low/high/low/high for the day.
             $events[] = [
-                'type' => $index % 2 === 0 ? 'low' : 'high',
                 'time' => $time,
                 'height' => $height,
             ];
@@ -320,41 +352,30 @@ class MarineConditionsController extends Controller
         $today = CarbonImmutable::now($timezone)->startOfDay();
         $now = CarbonImmutable::now($timezone);
 
-        $normalized = array_map(function (array $event) use ($today): array {
+        $heightCutoff = $this->lowTideHeightCutoff($events);
+
+        $normalized = array_map(function (array $event) use ($today, $heightCutoff): array {
             [$hours, $minutes] = array_map('intval', explode(':', (string) $event['time']));
             return [
-                'type' => $event['type'],
+                'type' => $heightCutoff !== null && $event['height'] <= $heightCutoff ? 'low' : 'high',
                 'height' => $event['height'],
                 'at' => $today->setTime($hours, $minutes),
             ];
         }, $events);
 
-        usort($normalized, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
-
-        $nextHigh = null;
-        $nextLow = null;
-        foreach ($normalized as $event) {
-            if ($event['at']->lessThan($now)) {
-                continue;
-            }
-            if ($event['type'] === 'high' && $nextHigh === null) {
-                $nextHigh = $event;
-            }
-            if ($event['type'] === 'low' && $nextLow === null) {
-                $nextLow = $event;
-            }
-        }
+        $selection = $this->selectUpcomingTideEvents($normalized, $now);
+        $nextHigh = $selection['next_high'];
+        $nextLow = $selection['next_low'];
+        $nextEvent = $selection['next_event'];
 
         preg_match('/coeficiente[^0-9]{0,40}([0-9]{1,3})/ui', $html, $coefMatch);
         $coefficient = isset($coefMatch[1]) ? (int) $coefMatch[1] : null;
 
-        $state = null;
-        if ($nextHigh && $nextLow) {
-            $state = $nextHigh['at']->lessThan($nextLow['at']) ? 'rising' : 'falling';
-        }
-
         return [
-            'state' => $state,
+            'state' => $selection['state'],
+            'next_event_type' => $nextEvent['type'] ?? null,
+            'next_event_at' => $nextEvent ? $nextEvent['at']->toIso8601String() : null,
+            'next_event_m' => $nextEvent['height'] ?? null,
             'next_high_at' => $nextHigh ? $nextHigh['at']->toIso8601String() : null,
             'next_low_at' => $nextLow ? $nextLow['at']->toIso8601String() : null,
             'next_high_m' => $nextHigh['height'] ?? null,
@@ -362,6 +383,23 @@ class MarineConditionsController extends Controller
             'coefficient' => $coefficient,
             'provider' => 'tabuademares',
         ];
+    }
+
+    /**
+     * @param  array<int, array{height:float}>  $events
+     */
+    protected function lowTideHeightCutoff(array $events): ?float
+    {
+        $heights = array_values(array_filter(array_map(fn (array $event): ?float => $this->toNullableFloat($event['height'] ?? null), $events), fn (?float $height): bool => $height !== null));
+
+        if (count($heights) < 2) {
+            return null;
+        }
+
+        sort($heights, SORT_NUMERIC);
+        $lowCount = max(1, (int) floor(count($heights) / 2));
+
+        return $heights[$lowCount - 1] ?? null;
     }
 
     protected function resolveTabuaSlug(float $latitude, float $longitude): string

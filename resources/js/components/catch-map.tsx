@@ -572,7 +572,7 @@ export function CatchMap({
         baseLayer === 'street' ? t('dashboard.map_street') : baseLayer === 'nautical' ? t('dashboard.map_nautical') : t('dashboard.map_satellite');
 
     return (
-        <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[#0f172a] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
+        <div className="relative h-full w-full overflow-hidden bg-[#0f172a]">
             <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
                 <MapViewport focusRequest={externalFocusRequest ?? focusRequest} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
@@ -745,7 +745,17 @@ export function CatchMap({
                                 </div>
 
                                 <div className="fishmap-popup-actions">
-                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--secondary" onClick={() => onStartRouteGuidance(route)}>
+                                    <button
+                                        type="button"
+                                        className="fishmap-popup-button fishmap-popup-button--secondary"
+                                        onClick={(event) => {
+                                            event.currentTarget
+                                                .closest('.leaflet-popup')
+                                                ?.querySelector<HTMLAnchorElement>('.leaflet-popup-close-button')
+                                                ?.click();
+                                            onStartRouteGuidance(route);
+                                        }}
+                                    >
                                         {t('dashboard.guide_route')}
                                     </button>
                                     {(route.can_manage ?? route.is_owner) && canRecordRoutes ? (
