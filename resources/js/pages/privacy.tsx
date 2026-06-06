@@ -17,7 +17,7 @@ const content = {
                 icon: ShieldCheck,
                 title: 'Privacy and account data',
                 body: [
-                    'When you create or use an account, Fishmap may store your name, email address, authentication data, app preferences, and saved content such as fish spots, notes, photos or photo links, route names, privacy settings, and timestamps.',
+                    'When you create or use an account, Fishmap may store your name, email, authentication data, app preferences, and saved content such as fish spots, notes, photos or photo links, route names, privacy settings, and timestamps.',
                     'Private spots and private routes are intended to be visible only to your account. Public spots or public routes may be visible to other Fishmap users, including their names, coordinates, timestamps, and any details you choose to publish.',
                 ],
             },
@@ -34,7 +34,7 @@ const content = {
                 icon: Database,
                 title: 'Marine conditions and external data',
                 body: [
-                    'Fishmap may request weather, wind, tide, and map data from external providers. These services may receive approximate coordinates, request metadata, IP address, or other technical information required to return the data.',
+                    'Fishmap may request weather, wind, tide, and map data from external providers. These services may receive approximate coordinates, request metadata, or other technical information required to return the data.',
                     'Tide, wind, depth, map, and routing information can be delayed, incomplete, unavailable, or inaccurate. Treat them as general guidance only.',
                 ],
             },
@@ -78,7 +78,7 @@ const content = {
                 icon: Database,
                 title: 'Condições marítimas e dados externos',
                 body: [
-                    'O Fishmap pode pedir dados de meteorologia, vento, marés e mapas a fornecedores externos. Esses serviços podem receber coordenadas aproximadas, metadados do pedido, endereço IP ou outra informação técnica necessária para devolver os dados.',
+                    'O Fishmap pode pedir dados de meteorologia, vento, marés e mapas a fornecedores externos. Esses serviços podem receber coordenadas aproximadas, metadados do pedido ou outra informação técnica necessária para devolver os dados.',
                     'Informação de marés, vento, profundidade, mapas e rotas pode estar atrasada, incompleta, indisponível ou errada. Usa-a apenas como orientação geral.',
                 ],
             },

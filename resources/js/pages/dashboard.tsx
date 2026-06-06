@@ -126,6 +126,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
     const [routeEditSelection, setRouteEditSelection] = useState<[number, number] | null>(null);
     const [routeEditDrawPoints, setRouteEditDrawPoints] = useState<[number, number][]>([]);
     const [safetyNoticeOpen, setSafetyNoticeOpen] = useState(false);
+    const safetyNoticeAcceptedRef = useRef(false);
 
     const form = useForm({
         species: '',
@@ -422,6 +423,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
     }, []);
 
     const acceptSafetyNotice = useCallback(() => {
+        safetyNoticeAcceptedRef.current = true;
         window.localStorage.setItem(SAFETY_NOTICE_STORAGE_KEY, 'accepted');
         setSafetyNoticeOpen(false);
     }, []);
@@ -1370,13 +1372,17 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                 onOpenChange={(open) => {
                     if (open) {
                         setSafetyNoticeOpen(true);
+                        return;
+                    }
+                    if (!safetyNoticeAcceptedRef.current && window.localStorage.getItem(SAFETY_NOTICE_STORAGE_KEY) !== 'accepted') {
+                        router.visit(route('home'));
                     }
                 }}
             >
                 <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-y-auto rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-5 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
                     <div className="mx-auto mb-2 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
-                    <div className="flex items-start gap-3">
-                        <div className="rounded-2xl bg-amber-100 p-3 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
+                    <div className="grid gap-3">
+                        <div className="w-fit rounded-2xl bg-amber-100 p-3 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
                             <ShieldAlert className="size-6" />
                         </div>
                         <DialogHeader>
@@ -1480,11 +1486,11 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                         }`}
                     >
                         <div className="pointer-events-auto flex items-center gap-2 md:hidden">
-                            <SidebarTrigger className="flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/88 text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur" />
+                            <SidebarTrigger className="flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/88 text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88 dark:text-white" />
                             <button
                                 type="button"
                                 onClick={() => setMobileHudOpen((current) => !current)}
-                                className="flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/88 text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur"
+                                className="flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/88 text-slate-800 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88 dark:text-white"
                                 title={mobileHudOpen ? t('common.close') : t('dashboard.map_tools')}
                             >
                                 {mobileHudOpen ? <X className="size-5" /> : <Layers3 className="size-5" />}
@@ -1492,27 +1498,27 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                         </div>
 
                         <div className={`${mobileHudOpen ? 'flex' : 'hidden'} pointer-events-auto max-h-[calc(100svh-5rem)] flex-col gap-3 overflow-y-auto pr-1 md:flex md:max-h-none md:overflow-visible md:pr-0`}>
-                            <div className="hidden rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur md:block">
+                            <div className="hidden rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur md:block dark:border-slate-700 dark:bg-slate-900/88">
                                 <div className="hidden items-center justify-between gap-3 md:flex">
                                     <Link href={route('home')}>
                                         <AppWordmark className="h-7 w-[155px] sm:h-9 sm:w-[190px]" />
                                     </Link>
-                                    <Link href={route('home')} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950">
+                                    <Link href={route('home')} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:hover:border-slate-600">
                                         {t('app.home')}
                                     </Link>
                                 </div>
-                                <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl">{t('dashboard.live_map')}</h1>
-                                <p className="mt-2 text-sm leading-6 text-slate-600">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
+                                <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl dark:text-slate-50">{t('dashboard.live_map')}</h1>
+                                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
                             </div>
 
-                            <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+                            <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
                                 <button
                                     type="button"
                                     onClick={() => setStatsCollapsed((current) => !current)}
                                     className="flex w-full items-center justify-between gap-3 text-left"
                                 >
-                                    <p className="text-sm font-semibold text-slate-950">{t('dashboard.fish_spots')} / {t('dashboard.routes')}</p>
-                                    {statsCollapsed ? <ChevronDown className="size-4 text-slate-600" /> : <ChevronUp className="size-4 text-slate-600" />}
+                                    <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">{t('dashboard.fish_spots')} / {t('dashboard.routes')}</p>
+                                    {statsCollapsed ? <ChevronDown className="size-4 text-slate-600 dark:text-slate-300" /> : <ChevronUp className="size-4 text-slate-600 dark:text-slate-300" />}
                                 </button>
                                 {!statsCollapsed ? (
                                     <div className="mt-3 grid grid-cols-2 gap-3">
@@ -1533,11 +1539,11 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                             </div>
 
                             {canRecordRoutes ? (
-                            <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+                            <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
-                                        <p className="text-sm font-semibold text-slate-950">{t('dashboard.route_recording')}</p>
-                                        <p className="mt-1 text-xs text-slate-600 pr-4">
+                                        <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">{t('dashboard.route_recording')}</p>
+                                        <p className="mt-1 pr-4 text-xs text-slate-600 dark:text-slate-300">
                                             {isRecordingRoute
                                                 ? t('dashboard.route_recording_live', { count: activeRoutePoints.length })
                                                 : simulationEnabled
@@ -1545,19 +1551,19 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                                   : t('dashboard.route_recording_idle')}
                                         </p>
                                         {simulationEnabled ? (
-                                            <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.18em] text-teal-700">
+                                            <p className="mt-1 text-[11px] font-medium tracking-[0.18em] text-teal-700 uppercase dark:text-teal-300">
                                                 {t('dashboard.simulation_click_move')}
                                             </p>
                                         ) : null}
                                     </div>
-                                    <button type="button" onClick={() => setRouteCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600">
+                                    <button type="button" onClick={() => setRouteCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600 dark:text-slate-300">
                                         {routeCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
                                     </button>
                                 </div>
 
                                 {!routeCardCollapsed ? <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                                     {canSimulateRoutes ? (
-                                        <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto">
+                                        <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto dark:text-slate-200">
                                             <input
                                                 type="checkbox"
                                                 checked={routeSimulationEnabled}
@@ -1576,7 +1582,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                     <select
                                         value={recordingVisibility}
                                         onChange={(event) => setRecordingVisibility(event.target.value as 'private' | 'public')}
-                                        className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                                        className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                                     >
                                         <option value="private">{t('dashboard.private_route')}</option>
                                         <option value="public">{t('dashboard.public_route')}</option>
@@ -1596,15 +1602,15 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                             ) : null}
 
                             {canRecordRoutes ? (
-                                <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+                                <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
-                                            <p className="text-sm font-semibold text-slate-950">{t('dashboard.marine_conditions')}</p>
-                                            <p className="mt-1 text-xs text-slate-600">{t('dashboard.marine_conditions_copy')}</p>
+                                            <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">{t('dashboard.marine_conditions')}</p>
+                                            <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{t('dashboard.marine_conditions_copy')}</p>
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <Wind className="mt-0.5 size-4 text-cyan-700" />
-                                            <button type="button" onClick={() => setMarineCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600">
+                                            <button type="button" onClick={() => setMarineCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600 dark:text-slate-300">
                                                 {marineCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
                                             </button>
                                         </div>
@@ -1613,49 +1619,49 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                     {!marineCardCollapsed ? (
                                         <>
                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                                                <div className="col-span-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2">
-                                                    <p className="font-medium text-teal-800">{t('dashboard.next_tide')}</p>
-                                                    <p className="mt-1 text-sm font-semibold text-teal-950">
+                                                <div className="col-span-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 dark:border-teal-900/70 dark:bg-teal-950/45">
+                                                    <p className="font-medium text-teal-800 dark:text-teal-300">{t('dashboard.next_tide')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-teal-950 dark:text-teal-50">
                                                         {formatTideEventLabel(upcomingTideEvent?.type, t)} ·{' '}
                                                         {formatTideTimeAndHeight(upcomingTideEvent?.at, upcomingTideEvent?.height)}
                                                     </p>
                                                 </div>
-                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="font-medium text-slate-500">{t('dashboard.wind')}</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+                                                    <p className="font-medium text-slate-500 dark:text-slate-400">{t('dashboard.wind')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
                                                         {formatWindLabel(marineConditions?.wind.speed_kmh, marineConditions?.wind.direction_deg)}
                                                     </p>
                                                 </div>
-                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="font-medium text-slate-500">{t('dashboard.wind_gust')}</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{formatSpeedKmh(marineConditions?.wind.gust_kmh ?? null)}</p>
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+                                                    <p className="font-medium text-slate-500 dark:text-slate-400">{t('dashboard.wind_gust')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">{formatSpeedKmh(marineConditions?.wind.gust_kmh ?? null)}</p>
                                                 </div>
-                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="font-medium text-slate-500">{t('dashboard.next_high_tide')}</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+                                                    <p className="font-medium text-slate-500 dark:text-slate-400">{t('dashboard.next_high_tide')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
                                                         {formatTideTimeAndHeight(marineConditions?.tide.next_high_at, marineConditions?.tide.next_high_m)}
                                                     </p>
                                                 </div>
-                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="font-medium text-slate-500">{t('dashboard.next_low_tide')}</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+                                                    <p className="font-medium text-slate-500 dark:text-slate-400">{t('dashboard.next_low_tide')}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
                                                         {formatTideTimeAndHeight(marineConditions?.tide.next_low_at, marineConditions?.tide.next_low_m)}
                                                     </p>
                                                 </div>
                                             </div>
 
                                             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                                                <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-medium text-cyan-900">
+                                                <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-medium text-cyan-900 dark:border-cyan-900/70 dark:bg-cyan-950/45 dark:text-cyan-200">
                                                     {t('dashboard.tide_state')}: {formatTideState(displayedTideState, t)}
                                                 </span>
-                                                <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-900">
+                                                <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-900 dark:border-violet-900/70 dark:bg-violet-950/45 dark:text-violet-200">
                                                     {t('dashboard.tide_coefficient')}: {marineConditions?.tide.coefficient ?? '--'}
                                                 </span>
                                             </div>
                                         </>
                                     ) : null}
 
-                                    {marineConditionsLoading ? <p className="mt-3 text-[11px] text-slate-500">{t('dashboard.loading_marine_conditions')}</p> : null}
+                                    {marineConditionsLoading ? <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">{t('dashboard.loading_marine_conditions')}</p> : null}
                                     {marineConditionsError ? <p className="mt-3 text-[11px] text-amber-700">{marineConditionsError}</p> : null}
                                     {marineConditions?.source === 'unavailable' ? (
                                         <p className="mt-3 text-[11px] text-amber-700">{t('dashboard.tide_official_unavailable')}</p>
@@ -2540,11 +2546,11 @@ function StatCard({
         <button
             type="button"
             onClick={onClick}
-            className={`rounded-[1.35rem] border border-white/70 bg-white/88 p-4 text-left shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur ${onClick ? 'transition hover:-translate-y-0.5 hover:border-teal-200' : ''} ${className}`}
+            className={`rounded-[1.35rem] border border-white/70 bg-white/88 p-4 text-left shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-950/88 ${onClick ? 'transition hover:-translate-y-0.5 hover:border-teal-200 dark:hover:border-teal-700' : ''} ${className}`}
         >
-            <Icon className="size-4 text-teal-700" />
-            <p className={`mt-3 font-semibold text-slate-950 ${compact ? 'text-sm' : 'text-2xl'}`}>{value}</p>
-            <p className="mt-1 text-xs text-slate-500 uppercase tracking-[0.18em]">{label}</p>
+            <Icon className="size-4 text-teal-700 dark:text-teal-300" />
+            <p className={`mt-3 font-semibold text-slate-950 dark:text-slate-50 ${compact ? 'text-sm' : 'text-2xl'}`}>{value}</p>
+            <p className="mt-1 text-xs tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">{label}</p>
         </button>
     );
 }
