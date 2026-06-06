@@ -12,6 +12,10 @@ Route::get('/', function () {
     return Inertia::render('welcome');
 })->name('home');
 
+Route::get('/privacy', function () {
+    return Inertia::render('privacy');
+})->name('privacy');
+
 Route::get('/maintenance', function () {
     return Inertia::render('maintenance');
 })->name('maintenance');

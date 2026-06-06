@@ -9,7 +9,7 @@ import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, ChevronDown, ChevronUp, Crosshair, Fish, Globe, Layers3, LoaderCircle, MapPinned, Navigation, Plus, Wind, X } from 'lucide-react';
+import { ArrowUp, CheckCircle2, ChevronDown, ChevronUp, Crosshair, Fish, Globe, Layers3, LoaderCircle, MapPinned, Navigation, Plus, ShieldAlert, Wind, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
@@ -60,6 +60,7 @@ const MIN_ROUTE_POINT_INTERVAL_MS = 900;
 const MIN_ROUTE_POINT_DISTANCE_METERS = 3;
 const MAX_REASONABLE_ROUTE_SPEED_KMH = 220;
 const MAX_ROUTE_ACCURACY_FOR_MOVING_METERS = 120;
+const SAFETY_NOTICE_STORAGE_KEY = 'fishmap.safety-privacy-ack.v1';
 
 export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProps) {
     const { flash, auth } = usePage<SharedData>().props;
@@ -124,6 +125,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
     const [routeEditDraftPoints, setRouteEditDraftPoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
     const [routeEditSelection, setRouteEditSelection] = useState<[number, number] | null>(null);
     const [routeEditDrawPoints, setRouteEditDrawPoints] = useState<[number, number][]>([]);
+    const [safetyNoticeOpen, setSafetyNoticeOpen] = useState(false);
 
     const form = useForm({
         species: '',
@@ -412,6 +414,17 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
             setMobileHudOpen(false);
         }
     }, [dialogOpen, routeDialogOpen]);
+
+    useEffect(() => {
+        if (window.localStorage.getItem(SAFETY_NOTICE_STORAGE_KEY) !== 'accepted') {
+            setSafetyNoticeOpen(true);
+        }
+    }, []);
+
+    const acceptSafetyNotice = useCallback(() => {
+        window.localStorage.setItem(SAFETY_NOTICE_STORAGE_KEY, 'accepted');
+        setSafetyNoticeOpen(false);
+    }, []);
 
     useEffect(() => {
         if (!displayTrackedPosition) {
@@ -1351,6 +1364,45 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                 <link rel="preconnect" href="https://fonts.bunny.net" />
                 <link href="https://fonts.bunny.net/css?family=manrope:400,500,600,700" rel="stylesheet" />
             </Head>
+
+            <Dialog
+                open={safetyNoticeOpen}
+                onOpenChange={(open) => {
+                    if (open) {
+                        setSafetyNoticeOpen(true);
+                    }
+                }}
+            >
+                <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-y-auto rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-5 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
+                    <div className="mx-auto mb-2 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
+                    <div className="flex items-start gap-3">
+                        <div className="rounded-2xl bg-amber-100 p-3 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
+                            <ShieldAlert className="size-6" />
+                        </div>
+                        <DialogHeader>
+                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.safety_notice_title')}</DialogTitle>
+                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.safety_notice_copy')}</DialogDescription>
+                        </DialogHeader>
+                    </div>
+
+                    <div className="mt-5 grid gap-3 text-sm leading-6 text-slate-700 dark:text-slate-300">
+                        {[t('dashboard.safety_notice_gps'), t('dashboard.safety_notice_data'), t('dashboard.safety_notice_responsibility')].map((item) => (
+                            <div key={item} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950">
+                                {item}
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <Link href={route('privacy')} className="text-sm font-semibold text-teal-800 transition hover:text-teal-700 dark:text-teal-300 dark:hover:text-teal-200">
+                            {t('dashboard.safety_notice_policy')}
+                        </Link>
+                        <Button type="button" onClick={acceptSafetyNotice} className="rounded-2xl">
+                            {t('dashboard.safety_notice_accept')}
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             <div className="flex min-h-svh flex-col p-0 md:h-screen">
                 <section className="relative min-h-0 flex-1 overflow-hidden rounded-none bg-[#081217]">

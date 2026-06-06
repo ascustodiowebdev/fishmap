@@ -21,4 +21,9 @@ class DashboardTest extends TestCase
 
         $this->get('/dashboard')->assertRedirect('/map');
     }
+
+    public function test_privacy_page_can_be_rendered()
+    {
+        $this->get('/privacy')->assertOk();
+    }
 }
