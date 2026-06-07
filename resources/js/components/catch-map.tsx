@@ -34,6 +34,8 @@ interface CatchMapProps {
     onDeleteRoute: (route: NavigationRoute) => void;
     onStartRouteGuidance: (route: NavigationRoute) => void;
     canRecordRoutes: boolean;
+    canUseSatellite: boolean;
+    onSatelliteUsageTick: (seconds: number) => void;
     keepTrackingInBackground: boolean;
     activeGuidanceRouteId: number | null;
     guidanceNearestPoint: [number, number] | null;
@@ -70,7 +72,7 @@ const shallowRiskSld = `<StyledLayerDescriptor version="1.0.0" xmlns="http://www
   </NamedLayer>
 </StyledLayerDescriptor>`;
 type BaseLayerMode = 'street' | 'nautical' | 'satellite';
-const layerOrder: BaseLayerMode[] = satelliteKey ? ['street', 'nautical', 'satellite'] : ['street', 'nautical'];
+const defaultLayerOrder: BaseLayerMode[] = ['street', 'nautical'];
 type PositionCoordsLike = {
     latitude: number;
     longitude: number;
@@ -121,6 +123,8 @@ export function CatchMap({
     onDeleteRoute,
     onStartRouteGuidance,
     canRecordRoutes,
+    canUseSatellite,
+    onSatelliteUsageTick,
     keepTrackingInBackground,
     activeGuidanceRouteId,
     guidanceNearestPoint,
@@ -146,6 +150,7 @@ export function CatchMap({
     const depthAbortControllerRef = useRef<AbortController | null>(null);
     const currentPositionHandlerRef = useRef(onCurrentPositionChange);
     const currentSpeedHandlerRef = useRef(onCurrentSpeedChange);
+    const satelliteUsageHandlerRef = useRef(onSatelliteUsageTick);
     const lastSpeedSampleRef = useRef<{ position: [number, number]; timestamp: number } | null>(null);
     const lastReportedSpeedRef = useRef<{ speedKmh: number; timestamp: number } | null>(null);
 
@@ -156,6 +161,15 @@ export function CatchMap({
     useEffect(() => {
         currentSpeedHandlerRef.current = onCurrentSpeedChange;
     }, [onCurrentSpeedChange]);
+
+    useEffect(() => {
+        satelliteUsageHandlerRef.current = onSatelliteUsageTick;
+    }, [onSatelliteUsageTick]);
+
+    const availableLayerOrder = useMemo<BaseLayerMode[]>(
+        () => (satelliteKey && canUseSatellite ? [...defaultLayerOrder, 'satellite'] : defaultLayerOrder),
+        [canUseSatellite],
+    );
 
     useEffect(() => {
         const shouldKeepScreenAwake = keepTrackingInBackground || isGuidanceActive;
@@ -171,6 +185,24 @@ export function CatchMap({
             void KeepAwake.allowSleep().catch(() => undefined);
         };
     }, [isGuidanceActive, keepTrackingInBackground]);
+
+    useEffect(() => {
+        if (baseLayer === 'satellite' && (!satelliteKey || !canUseSatellite)) {
+            setBaseLayer('nautical');
+        }
+    }, [baseLayer, canUseSatellite]);
+
+    useEffect(() => {
+        if (baseLayer !== 'satellite') {
+            return;
+        }
+
+        const interval = window.setInterval(() => {
+            satelliteUsageHandlerRef.current(60);
+        }, 60000);
+
+        return () => window.clearInterval(interval);
+    }, [baseLayer]);
 
     const catchPoints = catchLogs
         .filter((catchLog) => catchLog.latitude && catchLog.longitude)
@@ -563,8 +595,8 @@ export function CatchMap({
     }, [displayedPosition, locationAccuracy, positionOverride]);
 
     const cycleLayer = () => {
-        const currentIndex = layerOrder.indexOf(baseLayer);
-        const nextLayer = layerOrder[(currentIndex + 1) % layerOrder.length];
+        const currentIndex = availableLayerOrder.indexOf(baseLayer);
+        const nextLayer = availableLayerOrder[(currentIndex + 1) % availableLayerOrder.length];
         setBaseLayer(nextLayer);
     };
 
@@ -987,7 +1019,7 @@ export function CatchMap({
                     >
                         {t('dashboard.map_nautical')}
                     </button>
-                    {satelliteKey ? (
+                    {satelliteKey && canUseSatellite ? (
                         <button
                             type="button"
                             onClick={() => setBaseLayer('satellite')}

@@ -23,6 +23,10 @@ class User extends Authenticatable
         'email',
         'password',
         'is_admin',
+        'pro_lifetime',
+        'pro_expires_at',
+        'pro_granted_at',
+        'pro_granted_by_admin_id',
         'google_id',
         'avatar_url',
     ];
@@ -47,6 +51,9 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'is_admin' => 'boolean',
+            'pro_lifetime' => 'boolean',
+            'pro_expires_at' => 'datetime',
+            'pro_granted_at' => 'datetime',
             'password' => 'hashed',
         ];
     }
@@ -54,6 +61,13 @@ class User extends Authenticatable
     public function isAdmin(): bool
     {
         return (bool) $this->is_admin;
+    }
+
+    public function isPro(): bool
+    {
+        return $this->isAdmin()
+            || (bool) $this->pro_lifetime
+            || ($this->pro_expires_at !== null && $this->pro_expires_at->isFuture());
     }
 
     public function catchLogs(): HasMany
@@ -64,5 +78,10 @@ class User extends Authenticatable
     public function navigationRoutes(): HasMany
     {
         return $this->hasMany(NavigationRoute::class);
+    }
+
+    public function satelliteUsages(): HasMany
+    {
+        return $this->hasMany(SatelliteUsage::class);
     }
 }

@@ -23,6 +23,20 @@ class AppSetting extends Model
         return filter_var(static::getValue($key, $default ? '1' : '0'), FILTER_VALIDATE_BOOLEAN);
     }
 
+    public static function getInt(string $key, int $default = 0): int
+    {
+        $value = static::getValue($key, $default);
+
+        return is_numeric($value) ? (int) $value : $default;
+    }
+
+    public static function getString(string $key, string $default = ''): string
+    {
+        $value = static::getValue($key, $default);
+
+        return is_scalar($value) ? (string) $value : $default;
+    }
+
     public static function setValue(string $key, mixed $value): void
     {
         static::query()->updateOrCreate(

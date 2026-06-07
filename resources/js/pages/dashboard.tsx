@@ -15,6 +15,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 interface DashboardProps {
     catchLogs: CatchLog[];
     navigationRoutes: NavigationRoute[];
+    subscription: {
+        is_pro: boolean;
+        pro_lifetime: boolean;
+        pro_expires_at: string | null;
+        limits: {
+            spots: number;
+            routes: number;
+            satellite_seconds_monthly: number;
+        };
+        usage: {
+            spots: number;
+            routes: number;
+            satellite_seconds: number;
+        };
+        pricing: {
+            monthly_eur: string;
+            annual_eur: string;
+            lifetime_eur: string;
+        };
+    };
     stats: {
         total_catches: number;
         public_spots: number;
@@ -62,11 +82,17 @@ const MAX_REASONABLE_ROUTE_SPEED_KMH = 220;
 const MAX_ROUTE_ACCURACY_FOR_MOVING_METERS = 120;
 const SAFETY_NOTICE_STORAGE_KEY = 'fishmap.safety-privacy-ack.v1';
 
-export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProps) {
+export default function Dashboard({ catchLogs, navigationRoutes, subscription }: DashboardProps) {
     const { flash, auth } = usePage<SharedData>().props;
     const { t } = useTranslator();
     const canRecordRoutes = Boolean(auth.user);
     const canSimulateRoutes = Boolean(auth.user?.is_admin);
+    const [satelliteSecondsUsed, setSatelliteSecondsUsed] = useState(subscription.usage.satellite_seconds);
+    const isPro = subscription.is_pro;
+    const satelliteSecondsRemaining = Math.max(0, subscription.limits.satellite_seconds_monthly - satelliteSecondsUsed);
+    const canUseSatellite = isPro || satelliteSecondsRemaining > 0;
+    const spotLimitReached = !isPro && subscription.usage.spots >= subscription.limits.spots;
+    const routeLimitReached = !isPro && subscription.usage.routes >= subscription.limits.routes;
     const breadcrumbs: BreadcrumbItem[] = [
         {
             title: 'Fishmap',
@@ -127,6 +153,10 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
     const [routeEditDrawPoints, setRouteEditDrawPoints] = useState<[number, number][]>([]);
     const [safetyNoticeOpen, setSafetyNoticeOpen] = useState(false);
     const safetyNoticeAcceptedRef = useRef(false);
+
+    useEffect(() => {
+        setSatelliteSecondsUsed(subscription.usage.satellite_seconds);
+    }, [subscription.usage.satellite_seconds]);
 
     const form = useForm({
         species: '',
@@ -597,6 +627,62 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
         setDialogOpen(true);
     }, []);
 
+    const shareCatchLog = useCallback(
+        (catchLog: CatchLog) => {
+            if (!isPro) {
+                setSubmitError(t('dashboard.pro_private_sharing_required'));
+                setLibraryDialogOpen(false);
+                return;
+            }
+
+            router.post(route('catch-logs.share', catchLog.id), {}, { preserveScroll: true });
+        },
+        [isPro, t],
+    );
+
+    const revokeCatchLogShare = useCallback((catchLog: CatchLog) => {
+        router.delete(route('catch-logs.share.destroy', catchLog.id), { preserveScroll: true });
+    }, []);
+
+    const shareNavigationRoute = useCallback(
+        (navigationRoute: NavigationRoute) => {
+            if (!isPro) {
+                setSubmitError(t('dashboard.pro_private_sharing_required'));
+                setLibraryDialogOpen(false);
+                return;
+            }
+
+            router.post(route('navigation-routes.share', navigationRoute.id), {}, { preserveScroll: true });
+        },
+        [isPro, t],
+    );
+
+    const revokeNavigationRouteShare = useCallback((navigationRoute: NavigationRoute) => {
+        router.delete(route('navigation-routes.share.destroy', navigationRoute.id), { preserveScroll: true });
+    }, []);
+
+    const copyShareUrl = useCallback(
+        async (url: string | null | undefined) => {
+            if (!url) {
+                return;
+            }
+
+            try {
+                if (navigator.clipboard?.writeText) {
+                    await navigator.clipboard.writeText(url);
+                } else {
+                    window.prompt(t('dashboard.copy_share_link'), url);
+                }
+            } catch {
+                window.prompt(t('dashboard.copy_share_link'), url);
+            }
+
+            setSubmitError(t('dashboard.share_link_copied'));
+            setLibraryDialogOpen(false);
+        },
+        [t],
+    );
+
     const fetchCurrentPositionForCatch = useCallback(() => {
         const fetchNative = async () => {
             try {
@@ -724,6 +810,12 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                 return;
             }
 
+            if (routeLimitReached) {
+                setSubmitError(t('dashboard.pro_route_limit_reached', { count: subscription.limits.routes }));
+                setDialogOpen(false);
+                return;
+            }
+
             const startPosition = forcedStartPosition ?? (simulationEnabled ? simulatedPosition ?? currentTrackedPosition ?? [38.7223, -9.1393] : currentTrackedPosition);
 
             if (!startPosition) {
@@ -755,7 +847,7 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                 setSimulatedPosition(startPosition);
             }
         },
-        [canRecordRoutes, currentTrackedPosition, simulationEnabled, simulatedPosition, t],
+        [canRecordRoutes, currentTrackedPosition, routeLimitReached, simulationEnabled, simulatedPosition, subscription.limits.routes, t],
     );
 
     const stopRouteRecording = useCallback(() => {
@@ -1355,10 +1447,43 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
         });
     }, [displayTrackedPosition, fetchCurrentPositionForCatch]);
 
+    const recordSatelliteUsage = useCallback(
+        (seconds: number) => {
+            if (isPro) {
+                return;
+            }
+
+            router.post(
+                route('satellite-usage.store'),
+                { seconds },
+                {
+                    preserveScroll: true,
+                    preserveState: true,
+                    only: ['subscription'],
+                    onSuccess: (page) => {
+                        const nextSubscription = page.props.subscription as DashboardProps['subscription'] | undefined;
+                        if (typeof nextSubscription?.usage.satellite_seconds === 'number') {
+                            setSatelliteSecondsUsed(nextSubscription.usage.satellite_seconds);
+                        } else {
+                            setSatelliteSecondsUsed((current) => Math.min(subscription.limits.satellite_seconds_monthly, current + seconds));
+                        }
+                    },
+                    onError: () => {
+                        setSatelliteSecondsUsed((current) => Math.min(subscription.limits.satellite_seconds_monthly, current + seconds));
+                    },
+                },
+            );
+        },
+        [isPro, subscription.limits.satellite_seconds_monthly],
+    );
+
     const fishSpotCount = catchLogs.length.toString();
     const routeCount = navigationRoutes.length.toString();
     const upcomingTideEvent = getUpcomingTideEvent(marineConditions?.tide);
     const displayedTideState = upcomingTideEvent?.type === 'high' ? 'rising' : upcomingTideEvent?.type === 'low' ? 'falling' : marineConditions?.tide.state;
+    const satelliteQuotaLabel = isPro
+        ? t('dashboard.satellite_quota_pro')
+        : t('dashboard.satellite_quota', { remaining: formatDurationShort(satelliteSecondsRemaining) });
 
     return (
         <AppLayout breadcrumbs={breadcrumbs} hideHeader>
@@ -1469,6 +1594,8 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                         onDeleteRoute={openRouteDeleteDialog}
                         onStartRouteGuidance={requestRouteGuidance}
                         canRecordRoutes={canRecordRoutes}
+                        canUseSatellite={canUseSatellite}
+                        onSatelliteUsageTick={recordSatelliteUsage}
                         keepTrackingInBackground={isRecordingRoute || isGuidanceActive || isFollowModeActive}
                         activeGuidanceRouteId={guidedRouteId}
                         guidanceNearestPoint={guidanceMetrics?.nearestPoint ?? null}
@@ -1536,6 +1663,10 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                         />
                                     </div>
                                 ) : null}
+                            </div>
+
+                            <div className="rounded-full border border-white/70 bg-white/88 px-4 py-2 text-xs font-semibold text-slate-700 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88 dark:text-slate-200">
+                                {satelliteQuotaLabel}
                             </div>
 
                             {canRecordRoutes ? (
@@ -1669,7 +1800,9 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                 </div>
                             ) : null}
 
-                            {mapPickMode ? (
+                            {submitError ? (
+                                <StatusBanner type={submitError === t('dashboard.share_link_copied') ? 'info' : 'warning'} message={submitError} />
+                            ) : mapPickMode ? (
                                 <StatusBanner type="info" message={t('dashboard.tap_to_choose')} />
                             ) : flash.success ? (
                                 <StatusBanner type="info" message={flash.success} />
@@ -1796,17 +1929,35 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                             </h3>
                                             {privateFishSpots.length > 0 ? (
                                                 privateFishSpots.map((catchLog) => (
-                                                    <button
+                                                    <div
                                                         key={`private-spot-${catchLog.id}`}
-                                                        type="button"
-                                                        onClick={() => focusCatchSpot(catchLog)}
                                                         className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
                                                     >
-                                                        <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
-                                                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                                            {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
-                                                        </p>
-                                                    </button>
+                                                        <button type="button" onClick={() => focusCatchSpot(catchLog)} className="w-full text-left">
+                                                            <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
+                                                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                                                {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
+                                                            </p>
+                                                        </button>
+                                                        {catchLog.is_owner ? (
+                                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                                {catchLog.share_url ? (
+                                                                    <>
+                                                                        <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => copyShareUrl(catchLog.share_url)}>
+                                                                            {t('dashboard.copy_share_link')}
+                                                                        </Button>
+                                                                        <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => revokeCatchLogShare(catchLog)}>
+                                                                            {t('dashboard.revoke_share_link')}
+                                                                        </Button>
+                                                                    </>
+                                                                ) : (
+                                                                    <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => shareCatchLog(catchLog)}>
+                                                                        {t('dashboard.share_private')}
+                                                                    </Button>
+                                                                )}
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
                                                 ))
                                             ) : (
                                                 <p className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.no_private_fish_spots')}</p>
@@ -1819,22 +1970,35 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                             </h3>
                                             {publicFishSpots.length > 0 ? (
                                                 publicFishSpots.map((catchLog) => (
-                                                    <button
+                                                    <div
                                                         key={`public-spot-${catchLog.id}`}
-                                                        type="button"
-                                                        onClick={() => focusCatchSpot(catchLog)}
                                                         className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
                                                     >
-                                                        <div className="flex items-center justify-between gap-3">
-                                                            <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
-                                                            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                                                                {catchLog.is_owner ? t('dashboard.yours') : catchLog.owner_name ?? 'Fishmap'}
-                                                            </span>
-                                                        </div>
-                                                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                                            {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
-                                                        </p>
-                                                    </button>
+                                                        <button type="button" onClick={() => focusCatchSpot(catchLog)} className="w-full text-left">
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
+                                                                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                                                                    {catchLog.is_owner ? t('dashboard.yours') : catchLog.owner_name ?? 'Fishmap'}
+                                                                </span>
+                                                            </div>
+                                                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                                                {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
+                                                            </p>
+                                                        </button>
+                                                        {catchLog.is_owner ? (
+                                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                                {catchLog.share_url ? (
+                                                                    <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => copyShareUrl(catchLog.share_url)}>
+                                                                        {t('dashboard.copy_share_link')}
+                                                                    </Button>
+                                                                ) : (
+                                                                    <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => shareCatchLog(catchLog)}>
+                                                                        {t('dashboard.share_private')}
+                                                                    </Button>
+                                                                )}
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
                                                 ))
                                             ) : (
                                                 <p className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.no_public_fish_spots')}</p>
@@ -1873,6 +2037,38 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                                             >
                                                                 {t('dashboard.edit')}
                                                             </Button>
+                                                            {navigationRoute.share_url ? (
+                                                                <>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="outline"
+                                                                        size="sm"
+                                                                        className="h-8 rounded-xl"
+                                                                        onClick={() => copyShareUrl(navigationRoute.share_url)}
+                                                                    >
+                                                                        {t('dashboard.copy_share_link')}
+                                                                    </Button>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="outline"
+                                                                        size="sm"
+                                                                        className="h-8 rounded-xl"
+                                                                        onClick={() => revokeNavigationRouteShare(navigationRoute)}
+                                                                    >
+                                                                        {t('dashboard.revoke_share_link')}
+                                                                    </Button>
+                                                                </>
+                                                            ) : (
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-8 rounded-xl"
+                                                                    onClick={() => shareNavigationRoute(navigationRoute)}
+                                                                >
+                                                                    {t('dashboard.share_private')}
+                                                                </Button>
+                                                            )}
                                                             <Button
                                                                 type="button"
                                                                 variant="outline"
@@ -2052,17 +2248,36 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                         <div className="mt-6 grid gap-3 overflow-y-auto pr-1">
                                             <button
                                                 type="button"
-                                                onClick={() => setDialogStep('location-mode')}
-                                                className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-teal-300 hover:bg-teal-50"
+                                                onClick={() => {
+                                                    if (spotLimitReached) {
+                                                        setSubmitError(t('dashboard.pro_spot_limit_reached', { count: subscription.limits.spots }));
+                                                        setDialogOpen(false);
+                                                        return;
+                                                    }
+                                                    setDialogStep('location-mode');
+                                                }}
+                                                className={`rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-teal-300 hover:bg-teal-50 ${
+                                                    spotLimitReached ? 'opacity-70' : ''
+                                                }`}
                                             >
                                                 <p className="font-semibold text-slate-950">{t('dashboard.add_a_fish')}</p>
-                                                <p className="mt-1 text-sm text-slate-600">{t('dashboard.add_a_fish_copy')}</p>
+                                                <p className="mt-1 text-sm text-slate-600">
+                                                    {spotLimitReached
+                                                        ? t('dashboard.pro_spot_limit_reached', { count: subscription.limits.spots })
+                                                        : t('dashboard.add_a_fish_copy')}
+                                                </p>
                                             </button>
 
                                             {canRecordRoutes ? (
                                                 <button
                                                     type="button"
                                                     onClick={() => {
+                                                        if (routeLimitReached) {
+                                                            setSubmitError(t('dashboard.pro_route_limit_reached', { count: subscription.limits.routes }));
+                                                            setDialogOpen(false);
+                                                            return;
+                                                        }
+
                                                         if (routeSimulationEnabled) {
                                                             setRouteSimulationPickMode(true);
                                                             setDialogOpen(false);
@@ -2074,7 +2289,11 @@ export default function Dashboard({ catchLogs, navigationRoutes }: DashboardProp
                                                     className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-300"
                                                 >
                                                     <p className="font-semibold text-slate-950">{t('dashboard.start_navigation')}</p>
-                                                    <p className="mt-1 text-sm text-slate-600">{t('dashboard.start_navigation_copy')}</p>
+                                                    <p className="mt-1 text-sm text-slate-600">
+                                                        {routeLimitReached
+                                                            ? t('dashboard.pro_route_limit_reached', { count: subscription.limits.routes })
+                                                            : t('dashboard.start_navigation_copy')}
+                                                    </p>
                                                 </button>
                                             ) : null}
                                         </div>
@@ -2706,6 +2925,18 @@ function formatSpeedKmh(speed: number | null) {
     }
 
     return `${speed.toFixed(speed >= 10 ? 0 : 1)} km/h`;
+}
+
+function formatDurationShort(seconds: number) {
+    const safeSeconds = Math.max(0, Math.round(seconds));
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+
+    return `${minutes}m`;
 }
 
 function calculateDistanceMeters(start: [number, number], end: [number, number]) {

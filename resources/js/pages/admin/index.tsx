@@ -5,8 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem, type CatchLog, type NavigationRoute, type NavigationRoutePoint, type SharedData, type User } from '@/types';
 import { Head, router, usePage } from '@inertiajs/react';
-import { Shield, Users, Fish, Route, Wrench, Trash2, KeyRound } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { Crown, Shield, Users, Fish, Route, Wrench, Trash2, KeyRound } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 
 interface AdminUser extends User {
     catch_logs_count: number;
@@ -40,6 +40,14 @@ interface AdminPageProps extends SharedData {
     maintenanceMode: boolean;
     registrationsOpen: boolean;
     listLimit: number;
+    proSettings: {
+        monthly_price_eur: string;
+        annual_price_eur: string;
+        lifetime_price_eur: string;
+        free_spot_limit: string;
+        free_route_limit: string;
+        free_satellite_hours_monthly: string;
+    };
     users: AdminUser[];
     catchLogs: AdminCatchLog[];
     navigationRoutes: AdminNavigationRoute[];
@@ -56,6 +64,22 @@ function formatDate(value: string | null | undefined) {
     }
 
     return new Date(value).toLocaleString();
+}
+
+function formatProStatus(user: AdminUser) {
+    if (user.is_admin) {
+        return 'Admin includes Pro';
+    }
+
+    if (user.pro_lifetime) {
+        return 'Lifetime Pro';
+    }
+
+    if (user.is_pro && user.pro_expires_at) {
+        return `Pro until ${formatDate(user.pro_expires_at)}`;
+    }
+
+    return 'Free account';
 }
 
 function StatCard({
@@ -87,7 +111,7 @@ function StatCard({
 
 export default function AdminIndex() {
     const { props } = usePage<AdminPageProps>();
-    const { maintenanceMode, registrationsOpen, listLimit, users, catchLogs, navigationRoutes, stats, flash } = props;
+    const { maintenanceMode, registrationsOpen, listLimit, proSettings, users, catchLogs, navigationRoutes, stats, flash } = props;
 
     const breadcrumbs: BreadcrumbItem[] = [
         {
@@ -97,8 +121,13 @@ export default function AdminIndex() {
     ];
     const [selectedCatchIds, setSelectedCatchIds] = useState<number[]>([]);
     const [selectedRouteIds, setSelectedRouteIds] = useState<number[]>([]);
+    const [proSettingsForm, setProSettingsForm] = useState(proSettings);
     const allCatchIds = useMemo(() => catchLogs.map((item) => item.id), [catchLogs]);
     const allRouteIds = useMemo(() => navigationRoutes.map((item) => item.id), [navigationRoutes]);
+
+    useEffect(() => {
+        setProSettingsForm(proSettings);
+    }, [proSettings]);
 
     const toggleMaintenance = () => {
         router.patch(route('admin.maintenance.update'), {
@@ -112,6 +141,18 @@ export default function AdminIndex() {
         router.patch(route('admin.registrations.update'), {
             enabled: !registrationsOpen,
         }, {
+            preserveScroll: true,
+        });
+    };
+
+    const saveProSettings = () => {
+        router.patch(route('admin.pro-settings.update'), proSettingsForm, {
+            preserveScroll: true,
+        });
+    };
+
+    const updateUserPro = (user: AdminUser, mode: 'revoke' | 'month' | 'year' | 'lifetime') => {
+        router.patch(route('admin.users.pro.update', user.id), { mode }, {
             preserveScroll: true,
         });
     };
@@ -270,6 +311,80 @@ export default function AdminIndex() {
 
                 <Card className="border-slate-200/70 dark:border-slate-800">
                     <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-xl">
+                            <Crown className="h-5 w-5" />
+                            Pro pricing and free limits
+                        </CardTitle>
+                        <CardDescription>
+                            App-side settings for displayed pricing, manual Pro grants, and free usage limits. Google Play Billing prices still need to match these products when billing is connected.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="grid gap-4 lg:grid-cols-3">
+                        <label className="grid gap-2 text-sm">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">Monthly price (EUR)</span>
+                            <input
+                                value={proSettingsForm.monthly_price_eur}
+                                onChange={(event) => setProSettingsForm((current) => ({ ...current, monthly_price_eur: event.target.value }))}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+                                inputMode="decimal"
+                            />
+                        </label>
+                        <label className="grid gap-2 text-sm">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">Annual price (EUR)</span>
+                            <input
+                                value={proSettingsForm.annual_price_eur}
+                                onChange={(event) => setProSettingsForm((current) => ({ ...current, annual_price_eur: event.target.value }))}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+                                inputMode="decimal"
+                            />
+                        </label>
+                        <label className="grid gap-2 text-sm">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">Lifetime price (EUR)</span>
+                            <input
+                                value={proSettingsForm.lifetime_price_eur}
+                                onChange={(event) => setProSettingsForm((current) => ({ ...current, lifetime_price_eur: event.target.value }))}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+                                inputMode="decimal"
+                                placeholder="Optional"
+                            />
+                        </label>
+                        <label className="grid gap-2 text-sm">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">Free fish spots</span>
+                            <input
+                                value={proSettingsForm.free_spot_limit}
+                                onChange={(event) => setProSettingsForm((current) => ({ ...current, free_spot_limit: event.target.value }))}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+                                inputMode="numeric"
+                            />
+                        </label>
+                        <label className="grid gap-2 text-sm">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">Free routes</span>
+                            <input
+                                value={proSettingsForm.free_route_limit}
+                                onChange={(event) => setProSettingsForm((current) => ({ ...current, free_route_limit: event.target.value }))}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+                                inputMode="numeric"
+                            />
+                        </label>
+                        <label className="grid gap-2 text-sm">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">Free satellite hours / month</span>
+                            <input
+                                value={proSettingsForm.free_satellite_hours_monthly}
+                                onChange={(event) => setProSettingsForm((current) => ({ ...current, free_satellite_hours_monthly: event.target.value }))}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+                                inputMode="decimal"
+                            />
+                        </label>
+                        <div className="flex items-end lg:col-span-3">
+                            <Button type="button" onClick={saveProSettings}>
+                                Save Pro settings
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-slate-200/70 dark:border-slate-800">
+                    <CardHeader>
                         <CardTitle className="text-xl">Users</CardTitle>
                         <CardDescription>Latest {Math.min(users.length, listLimit)} accounts, excluding passwords and remember tokens.</CardDescription>
                     </CardHeader>
@@ -281,8 +396,10 @@ export default function AdminIndex() {
                                         <div className="flex items-center gap-2">
                                             <h3 className="font-semibold text-slate-900 dark:text-slate-100">{user.name}</h3>
                                             {user.is_admin && <Badge>Admin</Badge>}
+                                            <Badge variant={user.is_pro ? 'default' : 'secondary'}>{user.is_pro ? 'Pro' : 'Free'}</Badge>
                                         </div>
                                         <p className="text-sm text-slate-600 dark:text-slate-400">{user.email}</p>
+                                        <p className="text-xs font-medium text-teal-700 dark:text-teal-300">{formatProStatus(user)}</p>
                                         <p className="text-xs text-slate-500 dark:text-slate-500">
                                             Created {formatDate(user.created_at)} • Updated {formatDate(user.updated_at)}
                                         </p>
@@ -297,6 +414,24 @@ export default function AdminIndex() {
                                     </div>
                                 </div>
                                 <div className="mt-4 flex flex-wrap gap-2">
+                                    {!user.is_admin && (
+                                        <>
+                                            <Button variant="outline" onClick={() => updateUserPro(user, 'month')}>
+                                                Grant 1 month Pro
+                                            </Button>
+                                            <Button variant="outline" onClick={() => updateUserPro(user, 'year')}>
+                                                Grant 1 year Pro
+                                            </Button>
+                                            <Button variant="outline" onClick={() => updateUserPro(user, 'lifetime')}>
+                                                Grant lifetime Pro
+                                            </Button>
+                                            {user.is_pro ? (
+                                                <Button variant="outline" onClick={() => updateUserPro(user, 'revoke')}>
+                                                    Revoke Pro
+                                                </Button>
+                                            ) : null}
+                                        </>
+                                    )}
                                     <Button variant="outline" onClick={() => sendPasswordReset(user)}>
                                         <KeyRound className="mr-2 h-4 w-4" />
                                         Send reset password

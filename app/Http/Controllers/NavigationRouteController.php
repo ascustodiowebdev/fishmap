@@ -2,25 +2,36 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\NavigationRoute;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class NavigationRouteController extends Controller
 {
     private const MAX_ROUTE_POINTS = 6000;
+    private const DEFAULT_FREE_ROUTE_LIMIT = 3;
 
     public function store(Request $request): RedirectResponse
     {
         $validated = $this->validateRouteMeta($request, true);
+        $user = $request->user();
+
+        if (! $user->isPro()) {
+            $limit = AppSetting::getInt('free_route_limit', self::DEFAULT_FREE_ROUTE_LIMIT);
+            if ($user->navigationRoutes()->count() >= $limit) {
+                return back()->with('error', "Free accounts can save up to {$limit} routes. Upgrade to Pro to save more.");
+            }
+        }
 
         $points = collect($validated['points'])->values();
         $firstPoint = $points->first();
         $lastPoint = $points->last();
 
-        $route = $request->user()->navigationRoutes()->create([
+        $route = $user->navigationRoutes()->create([
             'name' => ($validated['name'] ?? null) ?: 'Route '.Carbon::parse($validated['started_at'])->format('d/m/Y H:i'),
             'visibility' => $validated['visibility'],
             'started_at' => $validated['started_at'],
@@ -44,6 +55,38 @@ class NavigationRouteController extends Controller
         return redirect()
             ->route('map')
             ->with('success', __('messages.route_saved'));
+    }
+
+    public function share(Request $request, NavigationRoute $navigationRoute): RedirectResponse
+    {
+        $user = $request->user();
+        abort_unless($user && ($navigationRoute->user_id === $user->id || (bool) $user->is_admin), 403);
+
+        if (! $user->isPro()) {
+            return back()->with('error', 'Private sharing is available for Pro users.');
+        }
+
+        if (! $navigationRoute->share_token) {
+            $navigationRoute->forceFill([
+                'share_token' => Str::random(48),
+                'shared_at' => now(),
+            ])->save();
+        }
+
+        return back()->with('success', 'Private route sharing link is ready.');
+    }
+
+    public function revokeShare(Request $request, NavigationRoute $navigationRoute): RedirectResponse
+    {
+        $user = $request->user();
+        abort_unless($user && ($navigationRoute->user_id === $user->id || (bool) $user->is_admin), 403);
+
+        $navigationRoute->forceFill([
+            'share_token' => null,
+            'shared_at' => null,
+        ])->save();
+
+        return back()->with('success', 'Private route sharing link was revoked.');
     }
 
     public function update(Request $request, NavigationRoute $navigationRoute): RedirectResponse

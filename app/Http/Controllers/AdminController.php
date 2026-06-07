@@ -33,6 +33,9 @@ class AdminController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'is_admin' => $user->is_admin,
+                'is_pro' => $user->isPro(),
+                'pro_lifetime' => (bool) $user->pro_lifetime,
+                'pro_expires_at' => optional($user->pro_expires_at)?->toIso8601String(),
                 'email_verified_at' => optional($user->email_verified_at)?->toIso8601String(),
                 'created_at' => $user->created_at->toIso8601String(),
                 'updated_at' => $user->updated_at->toIso8601String(),
@@ -102,6 +105,14 @@ class AdminController extends Controller
         return Inertia::render('admin/index', [
             'maintenanceMode' => AppSetting::getBoolean('maintenance_mode'),
             'registrationsOpen' => AppSetting::getBoolean('registrations_open', true),
+            'proSettings' => [
+                'monthly_price_eur' => AppSetting::getString('pro_monthly_price_eur', '3.99'),
+                'annual_price_eur' => AppSetting::getString('pro_annual_price_eur', '29.99'),
+                'lifetime_price_eur' => AppSetting::getString('pro_lifetime_price_eur', ''),
+                'free_spot_limit' => AppSetting::getString('free_spot_limit', '5'),
+                'free_route_limit' => AppSetting::getString('free_route_limit', '3'),
+                'free_satellite_hours_monthly' => (string) round(AppSetting::getInt('free_satellite_seconds_monthly', 10800) / 3600, 2),
+            ],
             'users' => $users,
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
@@ -138,6 +149,69 @@ class AdminController extends Controller
         return back()->with('success', $validated['enabled']
             ? 'New registrations are now enabled.'
             : 'New registrations are now disabled.');
+    }
+
+    public function updateProSettings(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'monthly_price_eur' => ['required', 'numeric', 'min:0', 'max:999'],
+            'annual_price_eur' => ['nullable', 'numeric', 'min:0', 'max:9999'],
+            'lifetime_price_eur' => ['nullable', 'numeric', 'min:0', 'max:9999'],
+            'free_spot_limit' => ['required', 'integer', 'min:0', 'max:1000'],
+            'free_route_limit' => ['required', 'integer', 'min:0', 'max:1000'],
+            'free_satellite_hours_monthly' => ['required', 'numeric', 'min:0', 'max:744'],
+        ]);
+
+        AppSetting::setValue('pro_monthly_price_eur', number_format((float) $validated['monthly_price_eur'], 2, '.', ''));
+        AppSetting::setValue('pro_annual_price_eur', isset($validated['annual_price_eur']) && $validated['annual_price_eur'] !== null
+            ? number_format((float) $validated['annual_price_eur'], 2, '.', '')
+            : '');
+        AppSetting::setValue('pro_lifetime_price_eur', isset($validated['lifetime_price_eur']) && $validated['lifetime_price_eur'] !== null
+            ? number_format((float) $validated['lifetime_price_eur'], 2, '.', '')
+            : '');
+        AppSetting::setValue('free_spot_limit', $validated['free_spot_limit']);
+        AppSetting::setValue('free_route_limit', $validated['free_route_limit']);
+        AppSetting::setValue('free_satellite_seconds_monthly', (int) round((float) $validated['free_satellite_hours_monthly'] * 3600));
+
+        return back()->with('success', 'Pro pricing and free limits updated.');
+    }
+
+    public function updateUserPro(Request $request, User $user): RedirectResponse
+    {
+        $validated = $request->validate([
+            'mode' => ['required', 'in:revoke,month,year,lifetime'],
+        ]);
+
+        $payload = match ($validated['mode']) {
+            'month' => [
+                'pro_lifetime' => false,
+                'pro_expires_at' => now()->addMonth(),
+                'pro_granted_at' => now(),
+                'pro_granted_by_admin_id' => $request->user()?->id,
+            ],
+            'year' => [
+                'pro_lifetime' => false,
+                'pro_expires_at' => now()->addYear(),
+                'pro_granted_at' => now(),
+                'pro_granted_by_admin_id' => $request->user()?->id,
+            ],
+            'lifetime' => [
+                'pro_lifetime' => true,
+                'pro_expires_at' => null,
+                'pro_granted_at' => now(),
+                'pro_granted_by_admin_id' => $request->user()?->id,
+            ],
+            default => [
+                'pro_lifetime' => false,
+                'pro_expires_at' => null,
+                'pro_granted_at' => null,
+                'pro_granted_by_admin_id' => null,
+            ],
+        };
+
+        $user->forceFill($payload)->save();
+
+        return back()->with('success', "Pro status updated for {$user->email}.");
     }
 
     public function destroyCatchLog(CatchLog $catchLog): RedirectResponse

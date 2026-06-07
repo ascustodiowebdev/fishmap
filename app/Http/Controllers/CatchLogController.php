@@ -2,22 +2,31 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\CatchLog;
 use App\Models\NavigationRoute;
+use App\Models\SatelliteUsage;
+use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class CatchLogController extends Controller
 {
+    private const DEFAULT_FREE_SPOT_LIMIT = 5;
+    private const DEFAULT_FREE_ROUTE_LIMIT = 3;
+    private const DEFAULT_FREE_SATELLITE_SECONDS = 10800;
+
     public function index(): Response
     {
         $viewer = Auth::user();
         $viewerId = $viewer?->id;
         $viewerIsAdmin = (bool) ($viewer?->is_admin ?? false);
+        $viewerIsPro = (bool) ($viewer?->isPro() ?? false);
 
         $catchLogsQuery = CatchLog::query()
             ->with('user:id,name')
@@ -46,6 +55,10 @@ class CatchLogController extends Controller
                 'latitude' => $catchLog->latitude,
                 'longitude' => $catchLog->longitude,
                 'visibility' => $catchLog->visibility,
+                'share_token' => $catchLog->user_id === $viewerId || $viewerIsAdmin ? $catchLog->share_token : null,
+                'share_url' => ($catchLog->user_id === $viewerId || $viewerIsAdmin) && $catchLog->share_token
+                    ? route('shared.catch-log', $catchLog->share_token)
+                    : null,
                 'owner_name' => $catchLog->user?->name,
                 'is_owner' => $catchLog->user_id === $viewerId,
                 'created_at' => $catchLog->created_at->toIso8601String(),
@@ -72,6 +85,10 @@ class CatchLogController extends Controller
                 'id' => $route->id,
                 'name' => $route->name,
                 'visibility' => $route->visibility,
+                'share_token' => $route->user_id === $viewerId || $viewerIsAdmin ? $route->share_token : null,
+                'share_url' => ($route->user_id === $viewerId || $viewerIsAdmin) && $route->share_token
+                    ? route('shared.navigation-route', $route->share_token)
+                    : null,
                 'started_at' => optional($route->started_at)?->toIso8601String(),
                 'ended_at' => optional($route->ended_at)?->toIso8601String(),
                 'point_count' => $route->point_count,
@@ -88,6 +105,7 @@ class CatchLogController extends Controller
         return Inertia::render('dashboard', [
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
+            'subscription' => $this->subscriptionPayload($viewer, $ownCatchLogs->count(), NavigationRoute::query()->where('user_id', $viewerId)->count(), $viewerIsPro),
             'stats' => [
                 'total_catches' => $ownCatchLogs->count(),
                 'public_spots' => $ownCatchLogs->where('visibility', 'public')->count(),
@@ -99,18 +117,58 @@ class CatchLogController extends Controller
     public function store(Request $request): RedirectResponse
     {
         $validated = $this->validateCatchLog($request);
+        $user = $request->user();
+
+        if (! $user->isPro()) {
+            $limit = AppSetting::getInt('free_spot_limit', self::DEFAULT_FREE_SPOT_LIMIT);
+            if ($user->catchLogs()->count() >= $limit) {
+                return back()->with('error', "Free accounts can save up to {$limit} fish spots. Upgrade to Pro to save more.");
+            }
+        }
 
         Log::info('Fishmap catch save request validated.', [
-            'user_id' => $request->user()?->id,
+            'user_id' => $user?->id,
             'species' => $validated['species'],
             'visibility' => $validated['visibility'],
         ]);
 
-        $request->user()->catchLogs()->create($validated);
+        $user->catchLogs()->create($validated);
 
         return redirect()
             ->route('map')
             ->with('success', __('messages.catch_saved'));
+    }
+
+    public function share(Request $request, CatchLog $catchLog): RedirectResponse
+    {
+        $user = $request->user();
+        abort_unless($user && ($catchLog->user_id === $user->id || (bool) $user->is_admin), 403);
+
+        if (! $user->isPro()) {
+            return back()->with('error', 'Private sharing is available for Pro users.');
+        }
+
+        if (! $catchLog->share_token) {
+            $catchLog->forceFill([
+                'share_token' => Str::random(48),
+                'shared_at' => now(),
+            ])->save();
+        }
+
+        return back()->with('success', 'Private fish spot sharing link is ready.');
+    }
+
+    public function revokeShare(Request $request, CatchLog $catchLog): RedirectResponse
+    {
+        $user = $request->user();
+        abort_unless($user && ($catchLog->user_id === $user->id || (bool) $user->is_admin), 403);
+
+        $catchLog->forceFill([
+            'share_token' => null,
+            'shared_at' => null,
+        ])->save();
+
+        return back()->with('success', 'Private fish spot sharing link was revoked.');
     }
 
     public function update(Request $request, CatchLog $catchLog): RedirectResponse
@@ -135,6 +193,41 @@ class CatchLogController extends Controller
         return redirect()
             ->route('map')
             ->with('success', __('messages.catch_deleted'));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function subscriptionPayload(?User $viewer, int $spotCount, int $routeCount, bool $viewerIsPro): array
+    {
+        $freeSatelliteSeconds = AppSetting::getInt('free_satellite_seconds_monthly', self::DEFAULT_FREE_SATELLITE_SECONDS);
+        $satelliteUsage = $viewer
+            ? SatelliteUsage::query()
+                ->where('user_id', $viewer->id)
+                ->whereDate('month', now('Europe/Lisbon')->startOfMonth()->toDateString())
+                ->value('seconds_used')
+            : 0;
+
+        return [
+            'is_pro' => $viewerIsPro,
+            'pro_lifetime' => (bool) ($viewer?->pro_lifetime ?? false),
+            'pro_expires_at' => optional($viewer?->pro_expires_at)?->toIso8601String(),
+            'limits' => [
+                'spots' => AppSetting::getInt('free_spot_limit', self::DEFAULT_FREE_SPOT_LIMIT),
+                'routes' => AppSetting::getInt('free_route_limit', self::DEFAULT_FREE_ROUTE_LIMIT),
+                'satellite_seconds_monthly' => $freeSatelliteSeconds,
+            ],
+            'usage' => [
+                'spots' => $spotCount,
+                'routes' => $routeCount,
+                'satellite_seconds' => (int) ($satelliteUsage ?? 0),
+            ],
+            'pricing' => [
+                'monthly_eur' => AppSetting::getString('pro_monthly_price_eur', '3.99'),
+                'annual_eur' => AppSetting::getString('pro_annual_price_eur', '29.99'),
+                'lifetime_eur' => AppSetting::getString('pro_lifetime_price_eur', ''),
+            ],
+        ];
     }
 
     /**

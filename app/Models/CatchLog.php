@@ -26,6 +26,8 @@ class CatchLog extends Model
         'latitude',
         'longitude',
         'visibility',
+        'share_token',
+        'shared_at',
     ];
 
     /**
@@ -39,6 +41,7 @@ class CatchLog extends Model
             'fish_weight_kg' => 'decimal:2',
             'latitude' => 'decimal:7',
             'longitude' => 'decimal:7',
+            'shared_at' => 'datetime',
         ];
     }
 
