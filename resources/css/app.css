@@ -158,18 +158,19 @@
 }
 
 .fishmap-map,
-.fishmap-map .leaflet-container,
-.fishmap-map .leaflet-pane,
-.fishmap-map .leaflet-tile-container {
+.fishmap-map.leaflet-container {
     background: #07131a;
 }
 
 .fishmap-map--mobile-browser,
-.fishmap-map--mobile-browser.leaflet-container,
-.fishmap-map--mobile-browser .leaflet-pane,
-.fishmap-map--mobile-browser .leaflet-tile-pane,
-.fishmap-map--mobile-browser .leaflet-tile-container {
+.fishmap-map--mobile-browser.leaflet-container {
     background: #d9eef4;
+}
+
+.fishmap-map .leaflet-pane,
+.fishmap-map .leaflet-tile-pane,
+.fishmap-map .leaflet-tile-container {
+    background: transparent;
 }
 
 .fishmap-map .leaflet-map-pane,

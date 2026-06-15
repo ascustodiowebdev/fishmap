@@ -632,6 +632,8 @@ export function CatchMap({
     const shouldRenderDepthLayer = showDepthLayer && canRenderExternalRasterOverlays;
     const mobileBrowserTileMode = isNarrowBrowserViewport && !Capacitor.isNativePlatform();
     const mapClassName = `fishmap-map h-full w-full ${mobileBrowserTileMode ? 'fishmap-map--mobile-browser' : 'bg-[#0f172a]'}`;
+    const tileKeepBuffer = mobileBrowserTileMode ? 8 : MAP_TILE_BUFFER;
+    const tileUpdateInterval = mobileBrowserTileMode ? 80 : 200;
 
     return (
         <div className="relative h-full w-full overflow-hidden bg-[#0f172a]">
@@ -641,6 +643,7 @@ export function CatchMap({
                 scrollWheelZoom
                 zoomControl={false}
                 fadeAnimation={false}
+                zoomAnimation={!mobileBrowserTileMode}
                 markerZoomAnimation={false}
                 className={mapClassName}
             >
@@ -660,9 +663,10 @@ export function CatchMap({
                             ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=${satelliteKey}`
                             : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
                     }
-                    keepBuffer={MAP_TILE_BUFFER}
-                    updateWhenIdle={mobileBrowserTileMode}
-                    updateWhenZooming={!mobileBrowserTileMode}
+                    keepBuffer={tileKeepBuffer}
+                    updateInterval={tileUpdateInterval}
+                    updateWhenIdle={false}
+                    updateWhenZooming
                     eventHandlers={{
                         loading: () => {
                             if (hasCompletedInitialLoad) {
@@ -693,9 +697,10 @@ export function CatchMap({
                     <TileLayer
                         attribution='&copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> seamarks'
                         url="https://t1.openseamap.org/seamark/{z}/{x}/{y}.png"
-                        keepBuffer={MAP_TILE_BUFFER}
-                        updateWhenIdle={mobileBrowserTileMode}
-                        updateWhenZooming={!mobileBrowserTileMode}
+                        keepBuffer={tileKeepBuffer}
+                        updateInterval={tileUpdateInterval}
+                        updateWhenIdle={false}
+                        updateWhenZooming
                     />
                 ) : null}
                 {shouldRenderDepthLayer ? (
