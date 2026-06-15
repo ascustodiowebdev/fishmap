@@ -605,8 +605,16 @@ export function CatchMap({
 
     return (
         <div className="relative h-full w-full overflow-hidden bg-[#0f172a]">
-            <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
-                <MapViewport focusRequest={externalFocusRequest ?? focusRequest} />
+            <MapContainer
+                center={initialCenter}
+                zoom={catchPoints.length > 0 ? 8 : 11}
+                scrollWheelZoom
+                zoomControl={false}
+                fadeAnimation={false}
+                markerZoomAnimation={false}
+                className="fishmap-map h-full w-full bg-[#0f172a]"
+            >
+                <MapViewport focusRequest={externalFocusRequest ?? focusRequest} refreshKey={`${baseLayer}-${showDepthLayer ? 'depth' : 'flat'}`} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
                 <MapBoundsBridge onBoundsChange={onBoundsChange} />
                 <MapClickHandler allowTapSelection={allowTapSelection} onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
@@ -1083,26 +1091,70 @@ function calculateDistanceMeters(start: [number, number], end: [number, number])
     return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null }) {
+function MapViewport({ focusRequest, refreshKey }: { focusRequest: MapFocusRequest | null; refreshKey: string }) {
     const map = useMap();
     const previousKey = useRef<number | null>(null);
 
     useEffect(() => {
-        const invalidate = () => map.invalidateSize({ pan: false, debounceMoveend: true });
+        const timeouts: number[] = [];
+        let animationFrame: number | null = null;
 
-        invalidate();
+        const invalidate = () => {
+            if (animationFrame !== null) {
+                window.cancelAnimationFrame(animationFrame);
+            }
 
-        const immediate = window.setTimeout(invalidate, 0);
-        const delayed = window.setTimeout(invalidate, 250);
+            animationFrame = window.requestAnimationFrame(() => {
+                animationFrame = null;
+                map.invalidateSize({ pan: false, debounceMoveend: false });
+            });
+        };
 
-        window.addEventListener('resize', invalidate);
+        const invalidateAcrossSafariViewportSettling = () => {
+            invalidate();
+            [80, 220, 500, 1000].forEach((delay) => {
+                timeouts.push(window.setTimeout(invalidate, delay));
+            });
+        };
+
+        const container = map.getContainer();
+        const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(invalidateAcrossSafariViewportSettling) : null;
+        const visualViewport = window.visualViewport;
+
+        resizeObserver?.observe(container);
+        map.whenReady(invalidateAcrossSafariViewportSettling);
+        invalidateAcrossSafariViewportSettling();
+
+        window.addEventListener('resize', invalidateAcrossSafariViewportSettling);
+        window.addEventListener('orientationchange', invalidateAcrossSafariViewportSettling);
+        window.addEventListener('pageshow', invalidateAcrossSafariViewportSettling);
+        visualViewport?.addEventListener('resize', invalidateAcrossSafariViewportSettling);
+        visualViewport?.addEventListener('scroll', invalidateAcrossSafariViewportSettling);
 
         return () => {
-            window.clearTimeout(immediate);
-            window.clearTimeout(delayed);
-            window.removeEventListener('resize', invalidate);
+            timeouts.forEach((timeout) => window.clearTimeout(timeout));
+
+            if (animationFrame !== null) {
+                window.cancelAnimationFrame(animationFrame);
+            }
+
+            resizeObserver?.disconnect();
+            window.removeEventListener('resize', invalidateAcrossSafariViewportSettling);
+            window.removeEventListener('orientationchange', invalidateAcrossSafariViewportSettling);
+            window.removeEventListener('pageshow', invalidateAcrossSafariViewportSettling);
+            visualViewport?.removeEventListener('resize', invalidateAcrossSafariViewportSettling);
+            visualViewport?.removeEventListener('scroll', invalidateAcrossSafariViewportSettling);
         };
     }, [map]);
+
+    useEffect(() => {
+        const invalidate = () => map.invalidateSize({ pan: false, debounceMoveend: false });
+        const timeouts = [0, 80, 220, 500].map((delay) => window.setTimeout(invalidate, delay));
+
+        return () => {
+            timeouts.forEach((timeout) => window.clearTimeout(timeout));
+        };
+    }, [map, refreshKey]);
 
     useEffect(() => {
         if (!focusRequest || previousKey.current === focusRequest.key) {
@@ -1110,6 +1162,10 @@ function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null })
         }
 
         previousKey.current = focusRequest.key;
+        let settleTimer: number | null = null;
+        const invalidateAfterAnimation = () => {
+            settleTimer = window.setTimeout(() => map.invalidateSize({ pan: false, debounceMoveend: false }), 420);
+        };
 
         if (focusRequest.bounds) {
             map.fitBounds(focusRequest.bounds, {
@@ -1117,7 +1173,12 @@ function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null })
                 duration: 0.35,
                 padding: [36, 36],
             });
-            return;
+            invalidateAfterAnimation();
+            return () => {
+                if (settleTimer !== null) {
+                    window.clearTimeout(settleTimer);
+                }
+            };
         }
 
         if (focusRequest.center) {
@@ -1125,7 +1186,14 @@ function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null })
                 animate: true,
                 duration: 0.35,
             });
+            invalidateAfterAnimation();
         }
+
+        return () => {
+            if (settleTimer !== null) {
+                window.clearTimeout(settleTimer);
+            }
+        };
     }, [focusRequest, map]);
 
     return null;

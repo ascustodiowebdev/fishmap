@@ -164,6 +164,20 @@
     background: #07131a;
 }
 
+.fishmap-map .leaflet-map-pane,
+.fishmap-map .leaflet-tile-pane,
+.fishmap-map .leaflet-overlay-pane,
+.fishmap-map .leaflet-marker-pane {
+    backface-visibility: hidden;
+    transform-style: preserve-3d;
+    will-change: transform;
+}
+
+.fishmap-map .leaflet-tile {
+    backface-visibility: hidden;
+    transform: translateZ(0);
+}
+
 .fishmap-catch-pin {
     background: transparent !important;
     border: 0 !important;
