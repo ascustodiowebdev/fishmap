@@ -143,7 +143,9 @@ export function CatchMap({
     const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
     const [baseLayer, setBaseLayer] = useState<BaseLayerMode>('nautical');
     const [showDepthLayer, setShowDepthLayer] = useState(false);
-    const [isNarrowBrowserViewport, setIsNarrowBrowserViewport] = useState(false);
+    const [isNarrowBrowserViewport, setIsNarrowBrowserViewport] = useState(
+        () => !Capacitor.isNativePlatform() && typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+    );
     const [currentDepthMeters, setCurrentDepthMeters] = useState<number | null>(null);
     const [isDepthLoading, setIsDepthLoading] = useState(false);
     const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
@@ -166,9 +168,15 @@ export function CatchMap({
         const updateViewportMatch = () => setIsNarrowBrowserViewport(mediaQuery.matches);
 
         updateViewportMatch();
-        mediaQuery.addEventListener('change', updateViewportMatch);
+        if ('addEventListener' in mediaQuery) {
+            mediaQuery.addEventListener('change', updateViewportMatch);
 
-        return () => mediaQuery.removeEventListener('change', updateViewportMatch);
+            return () => mediaQuery.removeEventListener('change', updateViewportMatch);
+        }
+
+        mediaQuery.addListener(updateViewportMatch);
+
+        return () => mediaQuery.removeListener(updateViewportMatch);
     }, []);
 
     useEffect(() => {
@@ -622,6 +630,8 @@ export function CatchMap({
     const canRenderExternalRasterOverlays = Capacitor.isNativePlatform() || !isNarrowBrowserViewport;
     const shouldRenderSeaMarks = baseLayer === 'nautical' && canRenderExternalRasterOverlays;
     const shouldRenderDepthLayer = showDepthLayer && canRenderExternalRasterOverlays;
+    const mobileBrowserTileMode = isNarrowBrowserViewport && !Capacitor.isNativePlatform();
+    const mapClassName = `fishmap-map h-full w-full ${mobileBrowserTileMode ? 'fishmap-map--mobile-browser' : 'bg-[#0f172a]'}`;
 
     return (
         <div className="relative h-full w-full overflow-hidden bg-[#0f172a]">
@@ -632,7 +642,7 @@ export function CatchMap({
                 zoomControl={false}
                 fadeAnimation={false}
                 markerZoomAnimation={false}
-                className="fishmap-map h-full w-full bg-[#0f172a]"
+                className={mapClassName}
             >
                 <MapViewport focusRequest={externalFocusRequest ?? focusRequest} refreshKey={`${baseLayer}-${showDepthLayer ? 'depth' : 'flat'}`} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
@@ -651,8 +661,8 @@ export function CatchMap({
                             : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
                     }
                     keepBuffer={MAP_TILE_BUFFER}
-                    updateWhenIdle={false}
-                    updateWhenZooming
+                    updateWhenIdle={mobileBrowserTileMode}
+                    updateWhenZooming={!mobileBrowserTileMode}
                     eventHandlers={{
                         loading: () => {
                             if (hasCompletedInitialLoad) {
@@ -684,8 +694,8 @@ export function CatchMap({
                         attribution='&copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> seamarks'
                         url="https://t1.openseamap.org/seamark/{z}/{x}/{y}.png"
                         keepBuffer={MAP_TILE_BUFFER}
-                        updateWhenIdle={false}
-                        updateWhenZooming
+                        updateWhenIdle={mobileBrowserTileMode}
+                        updateWhenZooming={!mobileBrowserTileMode}
                     />
                 ) : null}
                 {shouldRenderDepthLayer ? (

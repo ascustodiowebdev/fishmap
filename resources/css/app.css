@@ -164,6 +164,14 @@
     background: #07131a;
 }
 
+.fishmap-map--mobile-browser,
+.fishmap-map--mobile-browser.leaflet-container,
+.fishmap-map--mobile-browser .leaflet-pane,
+.fishmap-map--mobile-browser .leaflet-tile-pane,
+.fishmap-map--mobile-browser .leaflet-tile-container {
+    background: #d9eef4;
+}
+
 .fishmap-map .leaflet-map-pane,
 .fishmap-map .leaflet-tile-pane,
 .fishmap-map .leaflet-overlay-pane,
@@ -176,6 +184,19 @@
 .fishmap-map .leaflet-tile {
     backface-visibility: hidden;
     transform: translateZ(0);
+}
+
+.fishmap-map--mobile-browser .leaflet-map-pane,
+.fishmap-map--mobile-browser .leaflet-tile-pane,
+.fishmap-map--mobile-browser .leaflet-overlay-pane,
+.fishmap-map--mobile-browser .leaflet-marker-pane {
+    transform-style: flat;
+    will-change: auto;
+}
+
+.fishmap-map--mobile-browser .leaflet-tile {
+    backface-visibility: visible;
+    transform: none;
 }
 
 .fishmap-catch-pin {
