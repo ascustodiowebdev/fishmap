@@ -25,7 +25,7 @@ class RestrictDuringMaintenance
         }
 
         if ($request->expectsJson()) {
-            abort(503, 'Fishmap is currently in maintenance mode.');
+            abort(503, 'TidePilot is currently in maintenance mode.');
         }
 
         return redirect()

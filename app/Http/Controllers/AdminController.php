@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AppSetting;
 use App\Models\CatchLog;
+use App\Models\FeedbackReport;
 use App\Models\NavigationRoute;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
@@ -14,7 +15,10 @@ use Inertia\Response;
 
 class AdminController extends Controller
 {
-    private const ADMIN_LIST_LIMIT = 200;
+    private const ADMIN_PER_PAGE = 25;
+
+    private const ADMIN_ROUTE_POINT_PREVIEW_LIMIT = 40;
+
     private const ADMIN_BULK_DELETE_LIMIT = 200;
 
     public function index(): Response
@@ -22,13 +26,15 @@ class AdminController extends Controller
         $userCount = User::query()->count();
         $catchLogCount = CatchLog::query()->count();
         $navigationRouteCount = NavigationRoute::query()->count();
+        $feedbackReportCount = FeedbackReport::query()->count();
+        $openFeedbackReportCount = FeedbackReport::query()->whereIn('status', ['open', 'reviewing'])->count();
 
         $users = User::query()
             ->withCount(['catchLogs', 'navigationRoutes'])
             ->latest()
-            ->limit(self::ADMIN_LIST_LIMIT)
-            ->get()
-            ->map(fn (User $user) => [
+            ->paginate(self::ADMIN_PER_PAGE, ['*'], 'users_page')
+            ->withQueryString()
+            ->through(fn (User $user) => [
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
@@ -47,9 +53,9 @@ class AdminController extends Controller
             ->with('user:id,name,email')
             ->latest('caught_at')
             ->latest()
-            ->limit(self::ADMIN_LIST_LIMIT)
-            ->get()
-            ->map(fn (CatchLog $catchLog) => [
+            ->paginate(self::ADMIN_PER_PAGE, ['*'], 'catches_page')
+            ->withQueryString()
+            ->through(fn (CatchLog $catchLog) => [
                 'id' => $catchLog->id,
                 'species' => $catchLog->species,
                 'bait_used' => $catchLog->bait_used,
@@ -71,12 +77,12 @@ class AdminController extends Controller
             ]);
 
         $navigationRoutes = NavigationRoute::query()
-            ->with('user:id,name,email', 'points:id,navigation_route_id,sequence,latitude,longitude,recorded_at')
+            ->with('user:id,name,email')
             ->latest('started_at')
             ->latest()
-            ->limit(self::ADMIN_LIST_LIMIT)
-            ->get()
-            ->map(fn (NavigationRoute $route) => [
+            ->paginate(self::ADMIN_PER_PAGE, ['*'], 'routes_page')
+            ->withQueryString()
+            ->through(fn (NavigationRoute $route) => [
                 'id' => $route->id,
                 'name' => $route->name,
                 'visibility' => $route->visibility,
@@ -94,12 +100,47 @@ class AdminController extends Controller
                     'name' => $route->user?->name,
                     'email' => $route->user?->email,
                 ],
-                'points' => $route->points->map(fn ($point) => [
-                    'sequence' => $point->sequence,
-                    'latitude' => (string) $point->latitude,
-                    'longitude' => (string) $point->longitude,
-                    'recorded_at' => optional($point->recorded_at)?->toIso8601String(),
-                ])->values(),
+                'points_preview_count' => min($route->point_count, self::ADMIN_ROUTE_POINT_PREVIEW_LIMIT),
+                'points' => $route->points()
+                    ->select('sequence', 'latitude', 'longitude', 'recorded_at')
+                    ->orderBy('sequence')
+                    ->limit(self::ADMIN_ROUTE_POINT_PREVIEW_LIMIT)
+                    ->get()
+                    ->map(fn ($point) => [
+                        'sequence' => $point->sequence,
+                        'latitude' => (string) $point->latitude,
+                        'longitude' => (string) $point->longitude,
+                        'recorded_at' => optional($point->recorded_at)?->toIso8601String(),
+                    ])->values(),
+            ]);
+
+        $feedbackReports = FeedbackReport::query()
+            ->with('user:id,name,email', 'adminResponder:id,name,email')
+            ->latest()
+            ->paginate(self::ADMIN_PER_PAGE, ['*'], 'feedback_page')
+            ->withQueryString()
+            ->through(fn (FeedbackReport $report) => [
+                'id' => $report->id,
+                'category' => $report->category,
+                'subject' => $report->subject,
+                'message' => $report->message,
+                'status' => $report->status,
+                'admin_response' => $report->admin_response,
+                'admin_responded_at' => optional($report->admin_responded_at)?->toIso8601String(),
+                'client_platform' => $report->client_platform,
+                'client_context' => $report->client_context,
+                'created_at' => $report->created_at->toIso8601String(),
+                'updated_at' => $report->updated_at->toIso8601String(),
+                'user' => [
+                    'id' => $report->user?->id,
+                    'name' => $report->user?->name,
+                    'email' => $report->user?->email,
+                ],
+                'admin_responder' => [
+                    'id' => $report->adminResponder?->id,
+                    'name' => $report->adminResponder?->name,
+                    'email' => $report->adminResponder?->email,
+                ],
             ]);
 
         return Inertia::render('admin/index', [
@@ -116,11 +157,14 @@ class AdminController extends Controller
             'users' => $users,
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
-            'listLimit' => self::ADMIN_LIST_LIMIT,
+            'feedbackReports' => $feedbackReports,
+            'perPage' => self::ADMIN_PER_PAGE,
             'stats' => [
                 'users' => $userCount,
                 'catches' => $catchLogCount,
                 'routes' => $navigationRouteCount,
+                'feedback' => $feedbackReportCount,
+                'open_feedback' => $openFeedbackReportCount,
             ],
         ]);
     }
@@ -174,6 +218,25 @@ class AdminController extends Controller
         AppSetting::setValue('free_satellite_seconds_monthly', (int) round((float) $validated['free_satellite_hours_monthly'] * 3600));
 
         return back()->with('success', 'Pro pricing and free limits updated.');
+    }
+
+    public function updateFeedbackReport(Request $request, FeedbackReport $feedbackReport): RedirectResponse
+    {
+        $validated = $request->validate([
+            'status' => ['required', 'in:open,reviewing,resolved,closed'],
+            'admin_response' => ['nullable', 'string', 'max:5000'],
+        ]);
+
+        $hasResponse = filled($validated['admin_response'] ?? null);
+
+        $feedbackReport->forceFill([
+            'status' => $validated['status'],
+            'admin_response' => $hasResponse ? trim($validated['admin_response']) : null,
+            'admin_responder_id' => $hasResponse ? $request->user()?->id : null,
+            'admin_responded_at' => $hasResponse ? now() : null,
+        ])->save();
+
+        return back()->with('success', 'Feedback report updated.');
     }
 
     public function updateUserPro(Request $request, User $user): RedirectResponse

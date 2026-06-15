@@ -591,7 +591,7 @@ class MarineConditionsController extends Controller
 
     protected function resolveTabuaSlug(float $latitude, float $longitude): string
     {
-        // Faro/Olhao area first (primary Fishmap usage); fallback keeps working for Portugal.
+        // Faro/Olhao area first (primary TidePilot usage); fallback keeps working for Portugal.
         if ($latitude >= 36.7 && $latitude <= 37.5 && $longitude >= -8.4 && $longitude <= -7.6) {
             return 'faro/faro';
         }
@@ -604,7 +604,7 @@ class MarineConditionsController extends Controller
         try {
             $response = Http::timeout(10)
                 ->withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Fishmap/1.0',
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 TidePilot/1.0',
                     'Accept-Language' => 'en-US,en;q=0.9,pt-PT;q=0.8',
                 ])
                 ->get($url);
@@ -621,7 +621,7 @@ class MarineConditionsController extends Controller
                 'method' => 'GET',
                 'timeout' => 10,
                 'header' => implode("\r\n", [
-                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Fishmap/1.0',
+                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 TidePilot/1.0',
                     'Accept-Language: en-US,en;q=0.9,pt-PT;q=0.8',
                 ]),
             ],

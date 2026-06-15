@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\CatchLog;
+use App\Models\FeedbackReport;
 use App\Models\NavigationRoute;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -136,6 +137,75 @@ class DashboardTest extends TestCase
 
         $this->assertTrue($user->refresh()->isPro());
         $this->assertNotNull($user->pro_expires_at);
+    }
+
+    public function test_authenticated_users_can_report_feedback()
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->from('/map')
+            ->post(route('feedback-reports.store'), [
+                'category' => 'gps',
+                'subject' => 'Speed jumps while recording',
+                'message' => 'The speed briefly drops to zero and the route skips a section.',
+                'client_platform' => 'browser',
+                'client_context' => '/map 430x932',
+                'website' => '',
+            ])
+            ->assertRedirect('/map')
+            ->assertSessionHas('success');
+
+        $report = FeedbackReport::query()->sole();
+
+        $this->assertSame($user->id, $report->user_id);
+        $this->assertSame('gps', $report->category);
+        $this->assertSame('open', $report->status);
+        $this->assertNotNull($report->ip_hash);
+    }
+
+    public function test_feedback_honeypot_does_not_store_report()
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->from('/map')
+            ->post(route('feedback-reports.store'), [
+                'category' => 'bug',
+                'subject' => 'Bot report',
+                'message' => 'This should be silently ignored.',
+                'website' => 'https://spam.example',
+            ])
+            ->assertRedirect('/map')
+            ->assertSessionHas('success');
+
+        $this->assertSame(0, FeedbackReport::query()->count());
+    }
+
+    public function test_admin_can_respond_to_feedback()
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
+        $report = FeedbackReport::query()->create([
+            'user_id' => $user->id,
+            'category' => 'bug',
+            'subject' => 'Map issue',
+            'message' => 'Tiles loaded slowly on Safari.',
+        ]);
+
+        $this->actingAs($admin)
+            ->patch(route('admin.feedback-reports.update', $report), [
+                'status' => 'resolved',
+                'admin_response' => 'Fixed in the latest web build.',
+            ])
+            ->assertSessionHas('success');
+
+        $report->refresh();
+
+        $this->assertSame('resolved', $report->status);
+        $this->assertSame('Fixed in the latest web build.', $report->admin_response);
+        $this->assertSame($admin->id, $report->admin_responder_id);
+        $this->assertNotNull($report->admin_responded_at);
     }
 
     private function catchPayload(): array

@@ -1,20 +1,38 @@
-﻿import { CatchMap } from '@/components/catch-map';
-import AppWordmark from '@/components/app-wordmark';
+﻿import AppWordmark from '@/components/app-wordmark';
+import { CatchMap } from '@/components/catch-map';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { SidebarTrigger } from '@/components/ui/sidebar';
+import AppLayout from '@/layouts/app-layout';
 import { useTranslator } from '@/lib/i18n';
 import { type BreadcrumbItem, type CatchLog, type MapFocusRequest, type NavigationRoute, type SharedData } from '@/types';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
-import AppLayout from '@/layouts/app-layout';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { ArrowUp, CheckCircle2, ChevronDown, ChevronUp, Crosshair, Fish, Globe, Layers3, LoaderCircle, MapPinned, Navigation, Plus, ShieldAlert, Wind, X } from 'lucide-react';
+import {
+    ArrowUp,
+    CheckCircle2,
+    ChevronDown,
+    ChevronUp,
+    Crosshair,
+    Fish,
+    Globe,
+    Layers3,
+    LoaderCircle,
+    MapPinned,
+    MessageSquare,
+    Navigation,
+    Plus,
+    ShieldAlert,
+    Wind,
+    X,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface DashboardProps {
     catchLogs: CatchLog[];
     navigationRoutes: NavigationRoute[];
+    feedbackReports: FeedbackReport[];
     subscription: {
         is_pro: boolean;
         pro_lifetime: boolean;
@@ -40,6 +58,18 @@ interface DashboardProps {
         public_spots: number;
         latest_trip: string | null;
     };
+}
+
+interface FeedbackReport {
+    id: number;
+    category: 'bug' | 'gps' | 'map' | 'account' | 'idea' | 'other';
+    subject: string;
+    message: string;
+    status: 'open' | 'reviewing' | 'resolved' | 'closed';
+    admin_response: string | null;
+    admin_responded_at: string | null;
+    created_at: string;
+    updated_at: string;
 }
 
 type CatchFlowStep = 'action' | 'location-mode' | 'confirm-location' | 'details' | 'navigation' | 'delete' | 'success';
@@ -81,9 +111,10 @@ const MIN_ROUTE_POINT_DISTANCE_METERS = 3;
 const MAX_REASONABLE_ROUTE_SPEED_KMH = 220;
 const MAX_ROUTE_ACCURACY_FOR_MOVING_METERS = 120;
 const SAFETY_NOTICE_STORAGE_KEY = 'fishmap.safety-privacy-ack.v1';
+const BROWSER_GPS_WARNING_STORAGE_KEY = 'tidepilot.browser-gps-warning.v1';
 
-export default function Dashboard({ catchLogs, navigationRoutes, subscription }: DashboardProps) {
-    const { flash, auth } = usePage<SharedData>().props;
+export default function Dashboard({ catchLogs, navigationRoutes, feedbackReports, subscription }: DashboardProps) {
+    const { flash, auth, name } = usePage<SharedData>().props;
     const { t } = useTranslator();
     const canRecordRoutes = Boolean(auth.user);
     const canSimulateRoutes = Boolean(auth.user?.is_admin);
@@ -96,7 +127,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
     const routeLimitReached = !isPro && subscription.usage.routes >= subscription.limits.routes;
     const breadcrumbs: BreadcrumbItem[] = [
         {
-            title: 'Fishmap',
+            title: name,
             href: '/map',
         },
     ];
@@ -148,11 +179,13 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
     const [statsCollapsed, setStatsCollapsed] = useState(true);
     const [routeCardCollapsed, setRouteCardCollapsed] = useState(true);
     const [marineCardCollapsed, setMarineCardCollapsed] = useState(true);
+    const [feedbackCardCollapsed, setFeedbackCardCollapsed] = useState(true);
     const [routeEditModeRouteId, setRouteEditModeRouteId] = useState<number | null>(null);
     const [routeEditDraftPoints, setRouteEditDraftPoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
     const [routeEditSelection, setRouteEditSelection] = useState<[number, number] | null>(null);
     const [routeEditDrawPoints, setRouteEditDrawPoints] = useState<[number, number][]>([]);
     const [safetyNoticeOpen, setSafetyNoticeOpen] = useState(false);
+    const [browserGpsWarningOpen, setBrowserGpsWarningOpen] = useState(false);
     const safetyNoticeAcceptedRef = useRef(false);
 
     useEffect(() => {
@@ -182,6 +215,15 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
         ended_time: formatTimeForDisplay(new Date()),
     });
 
+    const feedbackForm = useForm({
+        category: 'bug' as FeedbackReport['category'],
+        subject: '',
+        message: '',
+        client_platform: isNativeRuntime ? 'android-app' : 'browser',
+        client_context: '',
+        website: '',
+    });
+
     const selectedPosition = useMemo<[number, number] | null>(() => {
         const latitude = Number(form.data.latitude);
         const longitude = Number(form.data.longitude);
@@ -202,15 +244,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
         : [];
     const hasRouteEditTwoAnchors = Boolean(routeEditSelection && routeEditSelection[0] !== routeEditSelection[1]);
 
-    const privateFishSpots = useMemo(
-        () => catchLogs.filter((catchLog) => catchLog.is_owner && catchLog.visibility === 'private'),
-        [catchLogs],
-    );
+    const privateFishSpots = useMemo(() => catchLogs.filter((catchLog) => catchLog.is_owner && catchLog.visibility === 'private'), [catchLogs]);
 
-    const publicFishSpots = useMemo(
-        () => catchLogs.filter((catchLog) => catchLog.visibility === 'public'),
-        [catchLogs],
-    );
+    const publicFishSpots = useMemo(() => catchLogs.filter((catchLog) => catchLog.visibility === 'public'), [catchLogs]);
 
     const guidedRoute = useMemo(
         () => navigationRoutes.find((navigationRoute) => navigationRoute.id === guidedRouteId) ?? null,
@@ -228,29 +264,22 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
     }, [guidancePosition, guidedRoute]);
 
     const isGuidanceActive = Boolean(guidedRoute);
-    const displayedSpeedKmh = simulationEnabled ? currentSpeedKmh : gpsSpeedKmh ?? currentSpeedKmh;
+    const displayedSpeedKmh = simulationEnabled ? currentSpeedKmh : (gpsSpeedKmh ?? currentSpeedKmh);
     const shouldAutoFollowPosition =
         isFollowModeActive ||
-        (!dialogOpen &&
-            !routeDialogOpen &&
-            !libraryDialogOpen &&
-            !guidanceConfirmOpen &&
-            !mobileHudOpen &&
-            !isMapInteracting &&
-            !followPausedByUser);
+        (!dialogOpen && !routeDialogOpen && !libraryDialogOpen && !guidanceConfirmOpen && !mobileHudOpen && !isMapInteracting && !followPausedByUser);
     const guidanceArrowRotation = useMemo(() => {
         if (!guidanceMetrics) {
             return 0;
         }
 
-        const effectiveHeading =
-            (displayedSpeedKmh ?? 0) >= 4 ? currentHeadingDeg ?? deviceHeadingDeg : deviceHeadingDeg ?? currentHeadingDeg;
+        const effectiveHeading = (displayedSpeedKmh ?? 0) >= 4 ? (currentHeadingDeg ?? deviceHeadingDeg) : (deviceHeadingDeg ?? currentHeadingDeg);
 
         if (effectiveHeading === null) {
             return guidanceMetrics.rejoinBearing;
         }
 
-        return ((guidanceMetrics.rejoinBearing - effectiveHeading) % 360 + 360) % 360;
+        return (((guidanceMetrics.rejoinBearing - effectiveHeading) % 360) + 360) % 360;
     }, [currentHeadingDeg, deviceHeadingDeg, displayedSpeedKmh, guidanceMetrics]);
 
     useEffect(() => {
@@ -453,10 +482,26 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
         }
     }, []);
 
+    useEffect(() => {
+        if (isNativeRuntime) {
+            setBrowserGpsWarningOpen(false);
+            return;
+        }
+
+        if (window.localStorage.getItem(BROWSER_GPS_WARNING_STORAGE_KEY) !== 'dismissed') {
+            setBrowserGpsWarningOpen(true);
+        }
+    }, [isNativeRuntime]);
+
     const acceptSafetyNotice = useCallback(() => {
         safetyNoticeAcceptedRef.current = true;
         window.localStorage.setItem(SAFETY_NOTICE_STORAGE_KEY, 'accepted');
         setSafetyNoticeOpen(false);
+    }, []);
+
+    const dismissBrowserGpsWarning = useCallback(() => {
+        window.localStorage.setItem(BROWSER_GPS_WARNING_STORAGE_KEY, 'dismissed');
+        setBrowserGpsWarningOpen(false);
     }, []);
 
     useEffect(() => {
@@ -817,7 +862,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                 return;
             }
 
-            const startPosition = forcedStartPosition ?? (simulationEnabled ? simulatedPosition ?? currentTrackedPosition ?? [38.7223, -9.1393] : currentTrackedPosition);
+            const startPosition =
+                forcedStartPosition ??
+                (simulationEnabled ? (simulatedPosition ?? currentTrackedPosition ?? [38.7223, -9.1393]) : currentTrackedPosition);
 
             if (!startPosition) {
                 setSubmitError(t('dashboard.route_need_position'));
@@ -1026,7 +1073,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
     }, [routeEditDrawPoints, routeEditSelection]);
 
     const autoPickRouteEditEndAnchor = useCallback(() => {
-        if (!routeEditSelection || routeEditSelection[0] !== routeEditSelection[1] || routeEditDrawPoints.length === 0 || routeEditDraftPoints.length < 2) {
+        if (
+            !routeEditSelection ||
+            routeEditSelection[0] !== routeEditSelection[1] ||
+            routeEditDrawPoints.length === 0 ||
+            routeEditDraftPoints.length < 2
+        ) {
             return;
         }
 
@@ -1064,16 +1116,19 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
         setRouteEditDrawPoints([]);
     }, []);
 
-    const openRouteDeleteDialog = useCallback((navigationRoute: NavigationRoute) => {
-        if (!canRecordRoutes) {
-            return;
-        }
+    const openRouteDeleteDialog = useCallback(
+        (navigationRoute: NavigationRoute) => {
+            if (!canRecordRoutes) {
+                return;
+            }
 
-        setActiveRoute(navigationRoute);
-        setRouteDialogMode('delete');
-        setRouteDialogOpen(true);
-        setRouteSubmitError(null);
-    }, [canRecordRoutes]);
+            setActiveRoute(navigationRoute);
+            setRouteDialogMode('delete');
+            setRouteDialogOpen(true);
+            setRouteSubmitError(null);
+        },
+        [canRecordRoutes],
+    );
 
     const resetRouteDraft = useCallback(() => {
         setActiveRoutePoints([]);
@@ -1125,11 +1180,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                 onError: (errors) => {
                     setIsSavingRoute(false);
                     setRouteSubmitError(
-                        errors.name ??
-                            errors.visibility ??
-                            errors.started_at ??
-                            errors.ended_at ??
-                            'We could not update this route right now.',
+                        errors.name ?? errors.visibility ?? errors.started_at ?? errors.ended_at ?? 'We could not update this route right now.',
                     );
                 },
                 onSuccess: () => {
@@ -1174,7 +1225,20 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                 },
             },
         );
-    }, [activeRoute, activeRoutePoints, canRecordRoutes, isSavingRoute, resetRouteDraft, routeDialogMode, routeForm.data.ended_date, routeForm.data.ended_time, routeForm.data.name, routeForm.data.started_date, routeForm.data.started_time, routeForm.data.visibility]);
+    }, [
+        activeRoute,
+        activeRoutePoints,
+        canRecordRoutes,
+        isSavingRoute,
+        resetRouteDraft,
+        routeDialogMode,
+        routeForm.data.ended_date,
+        routeForm.data.ended_time,
+        routeForm.data.name,
+        routeForm.data.started_date,
+        routeForm.data.started_time,
+        routeForm.data.visibility,
+    ]);
 
     const deleteRoute = useCallback(() => {
         if (!canRecordRoutes) {
@@ -1249,7 +1313,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
             const latestPoint = currentPoints.at(-1);
             const nextRecordedAt = recordedAt ?? new Date().toISOString();
 
-            if (latestPoint && Math.abs(latestPoint.latitude - position[0]) < 0.0000001 && Math.abs(latestPoint.longitude - position[1]) < 0.0000001) {
+            if (
+                latestPoint &&
+                Math.abs(latestPoint.latitude - position[0]) < 0.0000001 &&
+                Math.abs(latestPoint.longitude - position[1]) < 0.0000001
+            ) {
                 return currentPoints;
             }
 
@@ -1260,8 +1328,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                 const isTooSoonForDenseTrack = elapsedMilliseconds < MIN_ROUTE_POINT_INTERVAL_MS && distanceMeters < 50;
                 const isLikelySpike = speedKmh > MAX_REASONABLE_ROUTE_SPEED_KMH || (distanceMeters > 300 && elapsedMilliseconds < 3000);
                 const isLikelyStationaryNoise = distanceMeters < MIN_ROUTE_POINT_DISTANCE_METERS && elapsedMilliseconds < 10000;
-                const accuracyTooWeakForMove =
-                    typeof accuracy === 'number' && accuracy > MAX_ROUTE_ACCURACY_FOR_MOVING_METERS && distanceMeters > 50;
+                const accuracyTooWeakForMove = typeof accuracy === 'number' && accuracy > MAX_ROUTE_ACCURACY_FOR_MOVING_METERS && distanceMeters > 50;
 
                 if (isTooSoonForDenseTrack || isLikelySpike || isLikelyStationaryNoise || accuracyTooWeakForMove) {
                     return currentPoints;
@@ -1403,6 +1470,24 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
         saveFish();
     };
 
+    const submitFeedback = (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+
+        feedbackForm
+            .transform((data) => ({
+                ...data,
+                client_platform: isNativeRuntime ? 'android-app' : 'browser',
+                client_context: `${window.location.pathname} ${window.innerWidth}x${window.innerHeight}`,
+            }))
+            .post(route('feedback-reports.store'), {
+                preserveScroll: true,
+                onSuccess: () => {
+                    feedbackForm.reset('subject', 'message', 'website');
+                    feedbackForm.setData('category', 'bug');
+                },
+            });
+    };
+
     const handleMapPositionChange = useCallback(
         (sample: { position: [number, number]; accuracy: number; recordedAt: string } | null) => {
             const position = sample?.position ?? null;
@@ -1419,16 +1504,13 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
         [appendRoutePoint, isRecordingRoute, routeSimulationEnabled, selectedPosition, setCoordinates],
     );
 
-    const handleMapInteractionChange = useCallback(
-        (interacting: boolean) => {
-            setIsMapInteracting(interacting);
+    const handleMapInteractionChange = useCallback((interacting: boolean) => {
+        setIsMapInteracting(interacting);
 
-            if (interacting) {
-                setFollowPausedByUser(true);
-            }
-        },
-        [],
-    );
+        if (interacting) {
+            setFollowPausedByUser(true);
+        }
+    }, []);
 
     const toggleFollowMode = useCallback(() => {
         setIsFollowModeActive((current) => {
@@ -1481,14 +1563,15 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
     const fishSpotCount = catchLogs.length.toString();
     const routeCount = navigationRoutes.length.toString();
     const upcomingTideEvent = getUpcomingTideEvent(marineConditions?.tide);
-    const displayedTideState = upcomingTideEvent?.type === 'high' ? 'rising' : upcomingTideEvent?.type === 'low' ? 'falling' : marineConditions?.tide.state;
+    const displayedTideState =
+        upcomingTideEvent?.type === 'high' ? 'rising' : upcomingTideEvent?.type === 'low' ? 'falling' : marineConditions?.tide.state;
     const satelliteQuotaLabel = isPro
         ? t('dashboard.satellite_quota_pro')
         : t('dashboard.satellite_quota', { remaining: formatDurationShort(satelliteSecondsRemaining) });
 
     return (
         <AppLayout breadcrumbs={breadcrumbs} hideHeader>
-            <Head title="Fishmap">
+            <Head title={name}>
                 <link rel="preconnect" href="https://fonts.bunny.net" />
                 <link href="https://fonts.bunny.net/css?family=manrope:400,500,600,700" rel="stylesheet" />
             </Head>
@@ -1505,28 +1588,40 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                     }
                 }}
             >
-                <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-y-auto rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-5 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
+                <DialogContent className="top-auto bottom-0 left-1/2 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-y-auto rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-5 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
                     <div className="mx-auto mb-2 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
                     <div className="grid gap-3">
                         <div className="w-fit rounded-2xl bg-amber-100 p-3 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
                             <ShieldAlert className="size-6" />
                         </div>
                         <DialogHeader>
-                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.safety_notice_title')}</DialogTitle>
-                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.safety_notice_copy')}</DialogDescription>
+                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                {t('dashboard.safety_notice_title')}
+                            </DialogTitle>
+                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                {t('dashboard.safety_notice_copy')}
+                            </DialogDescription>
                         </DialogHeader>
                     </div>
 
                     <div className="mt-5 grid gap-3 text-sm leading-6 text-slate-700 dark:text-slate-300">
-                        {[t('dashboard.safety_notice_gps'), t('dashboard.safety_notice_data'), t('dashboard.safety_notice_responsibility')].map((item) => (
-                            <div key={item} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950">
-                                {item}
-                            </div>
-                        ))}
+                        {[t('dashboard.safety_notice_gps'), t('dashboard.safety_notice_data'), t('dashboard.safety_notice_responsibility')].map(
+                            (item) => (
+                                <div
+                                    key={item}
+                                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950"
+                                >
+                                    {item}
+                                </div>
+                            ),
+                        )}
                     </div>
 
                     <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <Link href={route('privacy')} className="text-sm font-semibold text-teal-800 transition hover:text-teal-700 dark:text-teal-300 dark:hover:text-teal-200">
+                        <Link
+                            href={route('privacy')}
+                            className="text-sm font-semibold text-teal-800 transition hover:text-teal-700 dark:text-teal-300 dark:hover:text-teal-200"
+                        >
                             {t('dashboard.safety_notice_policy')}
                         </Link>
                         <Button type="button" onClick={acceptSafetyNotice} className="rounded-2xl">
@@ -1608,8 +1703,28 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                         onRouteEditMapPick={handleRouteEditMapPick}
                     />
 
+                    {browserGpsWarningOpen ? (
+                        <div className="pointer-events-none absolute inset-x-3 top-16 z-[540] flex justify-center md:top-4">
+                            <div className="pointer-events-auto flex max-w-[420px] items-start gap-3 rounded-[1.35rem] border border-amber-200 bg-amber-50/95 px-4 py-3 text-amber-950 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur dark:border-amber-900/70 dark:bg-amber-950/85 dark:text-amber-100">
+                                <ShieldAlert className="mt-0.5 size-5 shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-semibold">{t('dashboard.browser_gps_title')}</p>
+                                    <p className="mt-1 text-xs leading-5">{t('dashboard.browser_gps_copy')}</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={dismissBrowserGpsWarning}
+                                    className="rounded-full p-1 text-amber-900 transition hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/60"
+                                    title={t('common.close')}
+                                >
+                                    <X className="size-4" />
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
+
                     <div
-                        className={`pointer-events-none absolute inset-x-4 top-4 z-[520] flex max-w-[calc(100%-2rem)] flex-col gap-3 transition-opacity duration-200 md:left-4 md:right-auto md:w-[360px] md:max-w-none ${
+                        className={`pointer-events-none absolute inset-x-4 top-4 z-[520] flex max-w-[calc(100%-2rem)] flex-col gap-3 transition-opacity duration-200 md:right-auto md:left-4 md:w-[360px] md:max-w-none ${
                             isInitialMapLoading ? 'opacity-0' : 'opacity-100'
                         }`}
                     >
@@ -1625,18 +1740,27 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                             </button>
                         </div>
 
-                        <div className={`${mobileHudOpen ? 'flex' : 'hidden'} pointer-events-auto max-h-[calc(100svh-5rem)] flex-col gap-3 overflow-y-auto pr-1 md:flex md:max-h-none md:overflow-visible md:pr-0`}>
+                        <div
+                            className={`${mobileHudOpen ? 'flex' : 'hidden'} pointer-events-auto max-h-[calc(100svh-5rem)] flex-col gap-3 overflow-y-auto pr-1 md:flex md:max-h-none md:overflow-visible md:pr-0`}
+                        >
                             <div className="hidden rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur md:block dark:border-slate-700 dark:bg-slate-900/88">
                                 <div className="hidden items-center justify-between gap-3 md:flex">
                                     <Link href={route('home')}>
                                         <AppWordmark className="h-7 w-[155px] sm:h-9 sm:w-[190px]" />
                                     </Link>
-                                    <Link href={route('home')} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:hover:border-slate-600">
+                                    <Link
+                                        href={route('home')}
+                                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:hover:border-slate-600"
+                                    >
                                         {t('app.home')}
                                     </Link>
                                 </div>
-                                <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl dark:text-slate-50">{t('dashboard.live_map')}</h1>
-                                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}</p>
+                                <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl dark:text-slate-50">
+                                    {t('dashboard.live_map')}
+                                </h1>
+                                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                    {t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}
+                                </p>
                             </div>
 
                             <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
@@ -1645,8 +1769,14 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                     onClick={() => setStatsCollapsed((current) => !current)}
                                     className="flex w-full items-center justify-between gap-3 text-left"
                                 >
-                                    <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">{t('dashboard.fish_spots')} / {t('dashboard.routes')}</p>
-                                    {statsCollapsed ? <ChevronDown className="size-4 text-slate-600 dark:text-slate-300" /> : <ChevronUp className="size-4 text-slate-600 dark:text-slate-300" />}
+                                    <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">
+                                        {t('dashboard.fish_spots')} / {t('dashboard.routes')}
+                                    </p>
+                                    {statsCollapsed ? (
+                                        <ChevronDown className="size-4 text-slate-600 dark:text-slate-300" />
+                                    ) : (
+                                        <ChevronUp className="size-4 text-slate-600 dark:text-slate-300" />
+                                    )}
                                 </button>
                                 {!statsCollapsed ? (
                                     <div className="mt-3 grid grid-cols-2 gap-3">
@@ -1670,79 +1800,188 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {satelliteQuotaLabel}
                             </div>
 
-                            {canRecordRoutes ? (
                             <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
-                                        <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">{t('dashboard.route_recording')}</p>
-                                        <p className="mt-1 pr-4 text-xs text-slate-600 dark:text-slate-300">
-                                            {isRecordingRoute
-                                                ? t('dashboard.route_recording_live', { count: activeRoutePoints.length })
-                                                : simulationEnabled
-                                                  ? t('dashboard.simulation_click_move')
-                                                  : t('dashboard.route_recording_idle')}
+                                        <p className="flex items-center gap-2 text-sm font-semibold text-slate-950 dark:text-slate-50">
+                                            <MessageSquare className="size-4 text-teal-700 dark:text-teal-300" />
+                                            {t('dashboard.feedback_title')}
                                         </p>
-                                        {simulationEnabled ? (
-                                            <p className="mt-1 text-[11px] font-medium tracking-[0.18em] text-teal-700 uppercase dark:text-teal-300">
-                                                {t('dashboard.simulation_click_move')}
-                                            </p>
-                                        ) : null}
+                                        <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{t('dashboard.feedback_copy')}</p>
                                     </div>
-                                    <button type="button" onClick={() => setRouteCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600 dark:text-slate-300">
-                                        {routeCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
+                                    <button
+                                        type="button"
+                                        onClick={() => setFeedbackCardCollapsed((current) => !current)}
+                                        className="rounded-full p-1 text-slate-600 dark:text-slate-300"
+                                    >
+                                        {feedbackCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
                                     </button>
                                 </div>
 
-                                {!routeCardCollapsed ? <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                                    {canSimulateRoutes ? (
-                                        <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto dark:text-slate-200">
+                                {!feedbackCardCollapsed ? (
+                                    <div className="mt-4 space-y-4">
+                                        <form onSubmit={submitFeedback} className="space-y-3">
                                             <input
-                                                type="checkbox"
-                                                checked={routeSimulationEnabled}
-                                                onChange={(event) => {
-                                                    const checked = event.target.checked;
-                                                    setRouteSimulationEnabled(checked);
-
-                                                    if (!checked) {
-                                                        setSimulatedPosition(null);
-                                                    }
-                                                }}
+                                                type="text"
+                                                tabIndex={-1}
+                                                autoComplete="off"
+                                                value={feedbackForm.data.website}
+                                                onChange={(event) => feedbackForm.setData('website', event.target.value)}
+                                                className="hidden"
+                                                aria-hidden="true"
                                             />
-                                            {t('dashboard.simulation')}
-                                        </label>
-                                    ) : null}
-                                    <select
-                                        value={recordingVisibility}
-                                        onChange={(event) => setRecordingVisibility(event.target.value as 'private' | 'public')}
-                                        className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                                    >
-                                        <option value="private">{t('dashboard.private_route')}</option>
-                                        <option value="public">{t('dashboard.public_route')}</option>
-                                    </select>
+                                            <select
+                                                value={feedbackForm.data.category}
+                                                onChange={(event) =>
+                                                    feedbackForm.setData('category', event.target.value as FeedbackReport['category'])
+                                                }
+                                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                            >
+                                                <option value="bug">{t('dashboard.feedback_category_bug')}</option>
+                                                <option value="gps">{t('dashboard.feedback_category_gps')}</option>
+                                                <option value="map">{t('dashboard.feedback_category_map')}</option>
+                                                <option value="account">{t('dashboard.feedback_category_account')}</option>
+                                                <option value="idea">{t('dashboard.feedback_category_idea')}</option>
+                                                <option value="other">{t('dashboard.feedback_category_other')}</option>
+                                            </select>
+                                            <input
+                                                value={feedbackForm.data.subject}
+                                                onChange={(event) => feedbackForm.setData('subject', event.target.value)}
+                                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 transition outline-none placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-teal-400 dark:focus:ring-teal-900/40"
+                                                placeholder={t('dashboard.feedback_subject')}
+                                                maxLength={160}
+                                            />
+                                            <textarea
+                                                value={feedbackForm.data.message}
+                                                onChange={(event) => feedbackForm.setData('message', event.target.value)}
+                                                className="min-h-24 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 transition outline-none placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-teal-400 dark:focus:ring-teal-900/40"
+                                                placeholder={t('dashboard.feedback_message')}
+                                                maxLength={3000}
+                                            />
+                                            {Object.values(feedbackForm.errors).length > 0 ? (
+                                                <p className="text-xs text-amber-700 dark:text-amber-300">{Object.values(feedbackForm.errors)[0]}</p>
+                                            ) : null}
+                                            <Button type="submit" disabled={feedbackForm.processing} className="w-full rounded-xl">
+                                                {feedbackForm.processing ? t('common.saving') : t('dashboard.feedback_send')}
+                                            </Button>
+                                        </form>
 
-                                    {isRecordingRoute ? (
-                                        <Button type="button" variant="destructive" onClick={stopRouteRecording}>
-                                            {t('dashboard.stop_recording')}
-                                        </Button>
-                                    ) : (
-                                        <Button type="button" onClick={() => startRouteRecording()}>
-                                            {t('dashboard.start_recording')}
-                                        </Button>
-                                    )}
-                                </div> : null}
+                                        {feedbackReports.length > 0 ? (
+                                            <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
+                                                <p className="text-xs font-semibold tracking-[0.16em] text-slate-500 uppercase dark:text-slate-400">
+                                                    {t('dashboard.feedback_recent')}
+                                                </p>
+                                                {feedbackReports.map((report) => (
+                                                    <div
+                                                        key={report.id}
+                                                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-950"
+                                                    >
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <p className="font-semibold text-slate-900 dark:text-slate-100">{report.subject}</p>
+                                                            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                                                {formatFeedbackStatus(report.status, t)}
+                                                            </span>
+                                                        </div>
+                                                        {report.admin_response ? (
+                                                            <p className="mt-2 rounded-lg bg-teal-50 px-2 py-1.5 text-teal-900 dark:bg-teal-950/50 dark:text-teal-100">
+                                                                {report.admin_response}
+                                                            </p>
+                                                        ) : null}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
                             </div>
+
+                            {canRecordRoutes ? (
+                                <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.route_recording')}
+                                            </p>
+                                            <p className="mt-1 pr-4 text-xs text-slate-600 dark:text-slate-300">
+                                                {isRecordingRoute
+                                                    ? t('dashboard.route_recording_live', { count: activeRoutePoints.length })
+                                                    : simulationEnabled
+                                                      ? t('dashboard.simulation_click_move')
+                                                      : t('dashboard.route_recording_idle')}
+                                            </p>
+                                            {simulationEnabled ? (
+                                                <p className="mt-1 text-[11px] font-medium tracking-[0.18em] text-teal-700 uppercase dark:text-teal-300">
+                                                    {t('dashboard.simulation_click_move')}
+                                                </p>
+                                            ) : null}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRouteCardCollapsed((current) => !current)}
+                                            className="rounded-full p-1 text-slate-600 dark:text-slate-300"
+                                        >
+                                            {routeCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
+                                        </button>
+                                    </div>
+
+                                    {!routeCardCollapsed ? (
+                                        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                                            {canSimulateRoutes ? (
+                                                <label className="flex items-center gap-2 self-start text-xs font-medium text-slate-700 sm:self-auto dark:text-slate-200">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={routeSimulationEnabled}
+                                                        onChange={(event) => {
+                                                            const checked = event.target.checked;
+                                                            setRouteSimulationEnabled(checked);
+
+                                                            if (!checked) {
+                                                                setSimulatedPosition(null);
+                                                            }
+                                                        }}
+                                                    />
+                                                    {t('dashboard.simulation')}
+                                                </label>
+                                            ) : null}
+                                            <select
+                                                value={recordingVisibility}
+                                                onChange={(event) => setRecordingVisibility(event.target.value as 'private' | 'public')}
+                                                className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                            >
+                                                <option value="private">{t('dashboard.private_route')}</option>
+                                                <option value="public">{t('dashboard.public_route')}</option>
+                                            </select>
+
+                                            {isRecordingRoute ? (
+                                                <Button type="button" variant="destructive" onClick={stopRouteRecording}>
+                                                    {t('dashboard.stop_recording')}
+                                                </Button>
+                                            ) : (
+                                                <Button type="button" onClick={() => startRouteRecording()}>
+                                                    {t('dashboard.start_recording')}
+                                                </Button>
+                                            )}
+                                        </div>
+                                    ) : null}
+                                </div>
                             ) : null}
 
                             {canRecordRoutes ? (
                                 <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
-                                            <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">{t('dashboard.marine_conditions')}</p>
+                                            <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.marine_conditions')}
+                                            </p>
                                             <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{t('dashboard.marine_conditions_copy')}</p>
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <Wind className="mt-0.5 size-4 text-cyan-700" />
-                                            <button type="button" onClick={() => setMarineCardCollapsed((current) => !current)} className="rounded-full p-1 text-slate-600 dark:text-slate-300">
+                                            <button
+                                                type="button"
+                                                onClick={() => setMarineCardCollapsed((current) => !current)}
+                                                className="rounded-full p-1 text-slate-600 dark:text-slate-300"
+                                            >
                                                 {marineCardCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
                                             </button>
                                         </div>
@@ -1766,18 +2005,26 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                                 </div>
                                                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
                                                     <p className="font-medium text-slate-500 dark:text-slate-400">{t('dashboard.wind_gust')}</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">{formatSpeedKmh(marineConditions?.wind.gust_kmh ?? null)}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                                        {formatSpeedKmh(marineConditions?.wind.gust_kmh ?? null)}
+                                                    </p>
                                                 </div>
                                                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
                                                     <p className="font-medium text-slate-500 dark:text-slate-400">{t('dashboard.next_high_tide')}</p>
                                                     <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                                        {formatTideTimeAndHeight(marineConditions?.tide.next_high_at, marineConditions?.tide.next_high_m)}
+                                                        {formatTideTimeAndHeight(
+                                                            marineConditions?.tide.next_high_at,
+                                                            marineConditions?.tide.next_high_m,
+                                                        )}
                                                     </p>
                                                 </div>
                                                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
                                                     <p className="font-medium text-slate-500 dark:text-slate-400">{t('dashboard.next_low_tide')}</p>
                                                     <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                                        {formatTideTimeAndHeight(marineConditions?.tide.next_low_at, marineConditions?.tide.next_low_m)}
+                                                        {formatTideTimeAndHeight(
+                                                            marineConditions?.tide.next_low_at,
+                                                            marineConditions?.tide.next_low_m,
+                                                        )}
                                                     </p>
                                                 </div>
                                             </div>
@@ -1793,7 +2040,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                         </>
                                     ) : null}
 
-                                    {marineConditionsLoading ? <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">{t('dashboard.loading_marine_conditions')}</p> : null}
+                                    {marineConditionsLoading ? (
+                                        <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
+                                            {t('dashboard.loading_marine_conditions')}
+                                        </p>
+                                    ) : null}
                                     {marineConditionsError ? <p className="mt-3 text-[11px] text-amber-700">{marineConditionsError}</p> : null}
                                     {marineConditions?.source === 'unavailable' ? (
                                         <p className="mt-3 text-[11px] text-amber-700">{t('dashboard.tide_official_unavailable')}</p>
@@ -1812,15 +2063,20 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                     </div>
 
                     {guidedRoute ? (
-                        <div className="pointer-events-none absolute top-16 right-3 left-3 z-[515] md:inset-x-auto md:right-5 md:bottom-24 md:top-auto md:left-auto">
+                        <div className="pointer-events-none absolute top-16 right-3 left-3 z-[515] md:inset-x-auto md:top-auto md:right-5 md:bottom-24 md:left-auto">
                             <div className="pointer-events-auto flex min-w-0 items-center gap-2 rounded-full border border-white/70 bg-white/92 px-2.5 py-2 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur md:gap-3 md:px-3 dark:border-slate-700 dark:bg-slate-900/92">
                                 <div className="relative flex size-10 shrink-0 items-center justify-center rounded-full border border-teal-100 bg-gradient-to-br from-teal-50 to-cyan-100 text-teal-700 shadow-inner md:size-11 dark:border-teal-900/80 dark:from-teal-950/80 dark:to-cyan-950/50 dark:text-teal-300">
                                     <div className="absolute inset-1 rounded-full border border-teal-200/80 dark:border-teal-800/80" />
-                                    <ArrowUp className="size-5 transition-transform duration-200" style={{ transform: `rotate(${guidanceArrowRotation}deg)` }} />
+                                    <ArrowUp
+                                        className="size-5 transition-transform duration-200"
+                                        style={{ transform: `rotate(${guidanceArrowRotation}deg)` }}
+                                    />
                                 </div>
 
                                 <div className="min-w-0 flex-1">
-                                    <p className="text-[10px] font-semibold tracking-[0.18em] text-teal-700 uppercase">{t('dashboard.route_guidance')}</p>
+                                    <p className="text-[10px] font-semibold tracking-[0.18em] text-teal-700 uppercase">
+                                        {t('dashboard.route_guidance')}
+                                    </p>
                                     <p className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{guidedRoute.name}</p>
                                     <p className="text-xs text-slate-600 dark:text-slate-300">
                                         {guidanceMetrics ? formatDistanceMeters(guidanceMetrics.offCourseMeters) : '--'} •{' '}
@@ -1828,7 +2084,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                     </p>
                                 </div>
 
-                                <Button type="button" variant="outline" className="h-8 shrink-0 rounded-full px-3 text-xs" onClick={stopRouteGuidance}>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="h-8 shrink-0 rounded-full px-3 text-xs"
+                                    onClick={stopRouteGuidance}
+                                >
                                     {t('dashboard.stop_guidance')}
                                 </Button>
                             </div>
@@ -1863,11 +2124,13 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                             }
                         }}
                     >
-                        <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-lg sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
+                        <DialogContent className="top-auto bottom-0 left-1/2 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-lg sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
                             <div className="relative flex max-h-[92dvh] min-h-0 flex-col overflow-hidden p-5 sm:max-h-[85vh] sm:p-6">
                                 <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
                                 <DialogHeader>
-                                    <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.confirm_route_guidance')}</DialogTitle>
+                                    <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                        {t('dashboard.confirm_route_guidance')}
+                                    </DialogTitle>
                                     <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
                                         {t('dashboard.confirm_route_guidance_copy')}
                                     </DialogDescription>
@@ -1910,7 +2173,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                             }
                         }}
                     >
-                        <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-2xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
+                        <DialogContent className="top-auto bottom-0 left-1/2 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[85vh] sm:w-full sm:max-w-2xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
                             <div className="relative flex max-h-[92dvh] min-h-0 flex-col overflow-hidden p-5 sm:max-h-[85vh] sm:p-6">
                                 <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
                                 <DialogHeader>
@@ -1937,22 +2200,42 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                                         <button type="button" onClick={() => focusCatchSpot(catchLog)} className="w-full text-left">
                                                             <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
                                                             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                                                {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
+                                                                {catchLog.caught_at
+                                                                    ? new Date(catchLog.caught_at).toLocaleString()
+                                                                    : t('dashboard.date_not_set')}
                                                             </p>
                                                         </button>
                                                         {catchLog.is_owner ? (
                                                             <div className="mt-3 flex flex-wrap gap-2">
                                                                 {catchLog.share_url ? (
                                                                     <>
-                                                                        <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => copyShareUrl(catchLog.share_url)}>
+                                                                        <Button
+                                                                            type="button"
+                                                                            variant="outline"
+                                                                            size="sm"
+                                                                            className="h-8 rounded-xl"
+                                                                            onClick={() => copyShareUrl(catchLog.share_url)}
+                                                                        >
                                                                             {t('dashboard.copy_share_link')}
                                                                         </Button>
-                                                                        <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => revokeCatchLogShare(catchLog)}>
+                                                                        <Button
+                                                                            type="button"
+                                                                            variant="outline"
+                                                                            size="sm"
+                                                                            className="h-8 rounded-xl"
+                                                                            onClick={() => revokeCatchLogShare(catchLog)}
+                                                                        >
                                                                             {t('dashboard.revoke_share_link')}
                                                                         </Button>
                                                                     </>
                                                                 ) : (
-                                                                    <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => shareCatchLog(catchLog)}>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="outline"
+                                                                        size="sm"
+                                                                        className="h-8 rounded-xl"
+                                                                        onClick={() => shareCatchLog(catchLog)}
+                                                                    >
                                                                         {t('dashboard.share_private')}
                                                                     </Button>
                                                                 )}
@@ -1979,21 +2262,35 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                                             <div className="flex items-center justify-between gap-3">
                                                                 <p className="font-semibold text-slate-950 dark:text-slate-50">{catchLog.species}</p>
                                                                 <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                                                                    {catchLog.is_owner ? t('dashboard.yours') : catchLog.owner_name ?? 'Fishmap'}
+                                                                    {catchLog.is_owner ? t('dashboard.yours') : (catchLog.owner_name ?? name)}
                                                                 </span>
                                                             </div>
                                                             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                                                {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
+                                                                {catchLog.caught_at
+                                                                    ? new Date(catchLog.caught_at).toLocaleString()
+                                                                    : t('dashboard.date_not_set')}
                                                             </p>
                                                         </button>
                                                         {catchLog.is_owner ? (
                                                             <div className="mt-3 flex flex-wrap gap-2">
                                                                 {catchLog.share_url ? (
-                                                                    <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => copyShareUrl(catchLog.share_url)}>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="outline"
+                                                                        size="sm"
+                                                                        className="h-8 rounded-xl"
+                                                                        onClick={() => copyShareUrl(catchLog.share_url)}
+                                                                    >
                                                                         {t('dashboard.copy_share_link')}
                                                                     </Button>
                                                                 ) : (
-                                                                    <Button type="button" variant="outline" size="sm" className="h-8 rounded-xl" onClick={() => shareCatchLog(catchLog)}>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="outline"
+                                                                        size="sm"
+                                                                        className="h-8 rounded-xl"
+                                                                        onClick={() => shareCatchLog(catchLog)}
+                                                                    >
                                                                         {t('dashboard.share_private')}
                                                                     </Button>
                                                                 )}
@@ -2016,11 +2313,17 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                                     key={`route-library-${navigationRoute.id}`}
                                                     className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-teal-300 hover:bg-teal-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-teal-500 dark:hover:bg-slate-900"
                                                 >
-                                                    <button type="button" onClick={() => requestRouteGuidance(navigationRoute)} className="w-full text-left">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => requestRouteGuidance(navigationRoute)}
+                                                        className="w-full text-left"
+                                                    >
                                                         <div className="flex items-center justify-between gap-3">
                                                             <p className="font-semibold text-slate-950 dark:text-slate-50">{navigationRoute.name}</p>
                                                             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                                                                {navigationRoute.is_owner ? t('dashboard.yours') : navigationRoute.owner_name ?? 'Fishmap'}
+                                                                {navigationRoute.is_owner
+                                                                    ? t('dashboard.yours')
+                                                                    : (navigationRoute.owner_name ?? name)}
                                                             </span>
                                                         </div>
                                                         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
@@ -2132,7 +2435,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                     </div>
 
                     {routeEditModeRouteId ? (
-                        <div className="pointer-events-auto absolute right-3 top-4 z-[530] w-[min(92vw,360px)] rounded-2xl border border-white/70 bg-white/92 p-3 shadow-xl backdrop-blur md:right-5">
+                        <div className="pointer-events-auto absolute top-4 right-3 z-[530] w-[min(92vw,360px)] rounded-2xl border border-white/70 bg-white/92 p-3 shadow-xl backdrop-blur md:right-5">
                             <p className="text-sm font-semibold text-slate-900">Route fix mode</p>
                             {(() => {
                                 const hasStartAnchor = Boolean(routeEditSelection);
@@ -2142,13 +2445,19 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
 
                                 return (
                                     <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] font-semibold">
-                                        <div className={`rounded-lg px-2 py-1 text-center ${currentStep === 1 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                        <div
+                                            className={`rounded-lg px-2 py-1 text-center ${currentStep === 1 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}
+                                        >
                                             1 Start
                                         </div>
-                                        <div className={`rounded-lg px-2 py-1 text-center ${currentStep === 2 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                        <div
+                                            className={`rounded-lg px-2 py-1 text-center ${currentStep === 2 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}
+                                        >
                                             2 Draw
                                         </div>
-                                        <div className={`rounded-lg px-2 py-1 text-center ${currentStep === 3 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                        <div
+                                            className={`rounded-lg px-2 py-1 text-center ${currentStep === 3 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}
+                                        >
                                             3 End
                                         </div>
                                         <div className="col-span-3 mt-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700">
@@ -2182,10 +2491,22 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 <Button type="button" size="sm" variant="outline" onClick={() => setRouteEditSelection(null)}>
                                     Clear pick
                                 </Button>
-                                <Button type="button" size="sm" variant="outline" onClick={() => setRouteEditDrawPoints((current) => current.slice(0, -1))} disabled={routeEditDrawPoints.length === 0}>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setRouteEditDrawPoints((current) => current.slice(0, -1))}
+                                    disabled={routeEditDrawPoints.length === 0}
+                                >
                                     Undo draw
                                 </Button>
-                                <Button type="button" size="sm" variant="outline" onClick={() => setRouteEditDrawPoints([])} disabled={routeEditDrawPoints.length === 0}>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setRouteEditDrawPoints([])}
+                                    disabled={routeEditDrawPoints.length === 0}
+                                >
                                     Clear draw
                                 </Button>
                                 <Button
@@ -2193,11 +2514,19 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                     size="sm"
                                     variant="outline"
                                     onClick={autoPickRouteEditEndAnchor}
-                                    disabled={!routeEditSelection || routeEditSelection[0] !== routeEditSelection[1] || routeEditDrawPoints.length === 0}
+                                    disabled={
+                                        !routeEditSelection || routeEditSelection[0] !== routeEditSelection[1] || routeEditDrawPoints.length === 0
+                                    }
                                 >
                                     Auto end anchor
                                 </Button>
-                                <Button type="button" size="sm" variant="outline" onClick={applyRouteReplacementSegment} disabled={!hasRouteEditTwoAnchors || routeEditDrawPoints.length === 0}>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={applyRouteReplacementSegment}
+                                    disabled={!hasRouteEditTwoAnchors || routeEditDrawPoints.length === 0}
+                                >
                                     Apply replace
                                 </Button>
                                 <Button type="button" size="sm" variant="outline" onClick={removeSelectedRouteSegment} disabled={!routeEditSelection}>
@@ -2206,7 +2535,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 <Button type="button" size="sm" variant="outline" onClick={cancelRouteGeometryEdit} disabled={isSavingRoute}>
                                     Cancel
                                 </Button>
-                                <Button type="button" size="sm" onClick={saveRouteGeometryEdit} disabled={isSavingRoute || routeEditDraftPoints.length < 2}>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={saveRouteGeometryEdit}
+                                    disabled={isSavingRoute || routeEditDraftPoints.length < 2}
+                                >
                                     {isSavingRoute ? t('common.saving') : 'Save route'}
                                 </Button>
                             </div>
@@ -2234,7 +2568,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                         <DialogContent
                             onInteractOutside={(event) => event.preventDefault()}
                             onPointerDownOutside={(event) => event.preventDefault()}
-                            className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900"
+                            className="top-auto bottom-0 left-1/2 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900"
                         >
                             <div className="relative flex max-h-[92dvh] min-h-0 flex-col overflow-hidden p-5 sm:max-h-[90vh] sm:p-6">
                                 <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
@@ -2242,8 +2576,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {dialogStep === 'action' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.what_do')}</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.what_do_copy')}</DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.what_do')}
+                                            </DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                                {t('dashboard.what_do_copy')}
+                                            </DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-6 grid gap-3 overflow-y-auto pr-1">
@@ -2274,7 +2612,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                                     type="button"
                                                     onClick={() => {
                                                         if (routeLimitReached) {
-                                                            setSubmitError(t('dashboard.pro_route_limit_reached', { count: subscription.limits.routes }));
+                                                            setSubmitError(
+                                                                t('dashboard.pro_route_limit_reached', { count: subscription.limits.routes }),
+                                                            );
                                                             setDialogOpen(false);
                                                             return;
                                                         }
@@ -2304,8 +2644,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {dialogStep === 'navigation' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.navigation_later')}</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.navigation_later_copy')}</DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.navigation_later')}
+                                            </DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                                {t('dashboard.navigation_later_copy')}
+                                            </DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-6 overflow-y-auto rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
@@ -2323,8 +2667,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {dialogStep === 'location-mode' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.where_caught')}</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.where_caught_copy')}</DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.where_caught')}
+                                            </DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                                {t('dashboard.where_caught_copy')}
+                                            </DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-6 grid gap-3 overflow-y-auto pr-1">
@@ -2362,8 +2710,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {dialogStep === 'confirm-location' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.confirm_location')}</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.confirm_location_copy')}</DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.confirm_location')}
+                                            </DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                                {t('dashboard.confirm_location_copy')}
+                                            </DialogDescription>
                                         </DialogHeader>
 
                                         <div className="mt-4 rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
@@ -2394,10 +2746,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {dialogStep === 'details' ? (
                                     <>
                                         <DialogHeader>
-                                                <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
                                                 {activeCatch ? t('dashboard.edit_details') : t('dashboard.add_details')}
                                             </DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.details_copy')}</DialogDescription>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                                {t('dashboard.details_copy')}
+                                            </DialogDescription>
                                         </DialogHeader>
 
                                         {submitError ? <StatusBanner type="warning" message={submitError} /> : null}
@@ -2516,7 +2870,11 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                                     </Button>
                                                 </div>
                                                 <Button type="button" disabled={form.processing || !selectedPosition} onClick={saveFish}>
-                                                    {form.processing ? t('common.saving') : activeCatch ? t('dashboard.save_changes') : t('dashboard.save_fish')}
+                                                    {form.processing
+                                                        ? t('common.saving')
+                                                        : activeCatch
+                                                          ? t('dashboard.save_changes')
+                                                          : t('dashboard.save_fish')}
                                                 </Button>
                                             </div>
                                         </form>
@@ -2526,8 +2884,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {dialogStep === 'delete' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.delete_pin')}</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.delete_pin_copy')}</DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.delete_pin')}
+                                            </DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                                {t('dashboard.delete_pin_copy')}
+                                            </DialogDescription>
                                         </DialogHeader>
 
                                         {submitError ? <StatusBanner type="warning" message={submitError} /> : null}
@@ -2552,7 +2914,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                         <div className="flex size-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
                                             <CheckCircle2 className="size-8" />
                                         </div>
-                                        <h3 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">{successTitle}</h3>
+                                        <h3 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">
+                                            {successTitle}
+                                        </h3>
                                         <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{successMessage}</p>
                                     </div>
                                 ) : null}
@@ -2562,7 +2926,9 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                         <div className="flex size-16 items-center justify-center rounded-full bg-teal-50 text-teal-700">
                                             <LoaderCircle className="size-8 animate-spin" />
                                         </div>
-                                        <h3 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.saving_fish')}</h3>
+                                        <h3 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">
+                                            {t('dashboard.saving_fish')}
+                                        </h3>
                                         <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.saving_fish_copy')}</p>
                                     </div>
                                 ) : null}
@@ -2586,7 +2952,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                             }
                         }}
                     >
-                        <DialogContent className="left-1/2 top-auto bottom-0 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
+                        <DialogContent className="top-auto bottom-0 left-1/2 max-h-[92dvh] w-[calc(100%-1rem)] max-w-none translate-x-[-50%] translate-y-0 overflow-hidden rounded-t-[1.75rem] rounded-b-none border-slate-200 bg-white p-0 sm:top-[50%] sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-xl sm:translate-y-[-50%] sm:rounded-[1.75rem] dark:border-slate-700 dark:bg-slate-900">
                             <div className="relative flex max-h-[92dvh] min-h-0 flex-col overflow-hidden p-5 sm:max-h-[90vh] sm:p-6">
                                 <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 sm:hidden" />
 
@@ -2662,7 +3028,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
 
                                             <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                                                 {t('dashboard.route_points', {
-                                                    count: routeDialogMode === 'create' ? activeRoutePoints.length : activeRoute?.point_count ?? 0,
+                                                    count: routeDialogMode === 'create' ? activeRoutePoints.length : (activeRoute?.point_count ?? 0),
                                                 })}
                                             </div>
 
@@ -2700,8 +3066,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                                 {routeDialogMode === 'delete' ? (
                                     <>
                                         <DialogHeader>
-                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">{t('dashboard.delete_route')}</DialogTitle>
-                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">{t('dashboard.delete_route_copy')}</DialogDescription>
+                                            <DialogTitle className="text-2xl tracking-tight text-slate-950 dark:text-slate-50">
+                                                {t('dashboard.delete_route')}
+                                            </DialogTitle>
+                                            <DialogDescription className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                                {t('dashboard.delete_route_copy')}
+                                            </DialogDescription>
                                         </DialogHeader>
 
                                         {routeSubmitError ? <StatusBanner type="warning" message={routeSubmitError} /> : null}
@@ -2729,15 +3099,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
     );
 }
 
-function Field({
-    label,
-    error,
-    children,
-}: {
-    label: string;
-    error?: string;
-    children: React.ReactNode;
-}) {
+function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
     return (
         <label className="grid gap-2 text-sm">
             <span className="font-medium text-slate-700 dark:text-slate-200">{label}</span>
@@ -2787,6 +3149,10 @@ function StatusBanner({ type, message }: { type: 'info' | 'warning'; message: st
             {message}
         </div>
     );
+}
+
+function formatFeedbackStatus(status: FeedbackReport['status'], t: (key: string) => string) {
+    return t(`dashboard.feedback_status_${status}`);
 }
 
 function formatDateForDisplay(date: Date) {
@@ -2842,14 +3208,12 @@ function computeRouteGuidance(position: [number, number], route: NavigationRoute
     });
 
     const current = toXY(position);
-    let bestMatch:
-        | {
-              distance: number;
-              nearestPoint: [number, number];
-              rejoinBearing: number;
-              onCourse: boolean;
-          }
-        | null = null;
+    let bestMatch: {
+        distance: number;
+        nearestPoint: [number, number];
+        rejoinBearing: number;
+        onCourse: boolean;
+    } | null = null;
 
     for (let index = 0; index < routePoints.length - 1; index += 1) {
         const startLatLng = routePoints[index];
@@ -2905,11 +3269,9 @@ function calculateBearing(start: [number, number], end: [number, number]) {
     const deltaLngRad = ((endLng - startLng) * Math.PI) / 180;
 
     const y = Math.sin(deltaLngRad) * Math.cos(endLatRad);
-    const x =
-        Math.cos(startLatRad) * Math.sin(endLatRad) -
-        Math.sin(startLatRad) * Math.cos(endLatRad) * Math.cos(deltaLngRad);
+    const x = Math.cos(startLatRad) * Math.sin(endLatRad) - Math.sin(startLatRad) * Math.cos(endLatRad) * Math.cos(deltaLngRad);
 
-    return (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360;
+    return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
 function formatDistanceMeters(distance: number) {
@@ -2995,7 +3357,12 @@ function extractDeviceHeading(event: DeviceOrientationEvent) {
 
     const rawHeading = 360 - event.alpha;
     const windowWithOrientation = window as Window & { orientation?: number };
-    const screenAngle = typeof window.screen.orientation?.angle === 'number' ? window.screen.orientation.angle : typeof windowWithOrientation.orientation === 'number' ? windowWithOrientation.orientation : 0;
+    const screenAngle =
+        typeof window.screen.orientation?.angle === 'number'
+            ? window.screen.orientation.angle
+            : typeof windowWithOrientation.orientation === 'number'
+              ? windowWithOrientation.orientation
+              : 0;
 
     return normalizeDegrees(rawHeading + screenAngle);
 }

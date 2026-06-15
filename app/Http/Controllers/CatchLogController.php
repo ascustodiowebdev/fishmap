@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AppSetting;
 use App\Models\CatchLog;
+use App\Models\FeedbackReport;
 use App\Models\NavigationRoute;
 use App\Models\SatelliteUsage;
 use App\Models\User;
@@ -66,6 +67,23 @@ class CatchLogController extends Controller
 
         $ownCatchLogs = $catchLogs->where('is_owner', true);
 
+        $feedbackReports = FeedbackReport::query()
+            ->where('user_id', $viewerId)
+            ->latest()
+            ->limit(8)
+            ->get()
+            ->map(fn (FeedbackReport $report) => [
+                'id' => $report->id,
+                'category' => $report->category,
+                'subject' => $report->subject,
+                'message' => $report->message,
+                'status' => $report->status,
+                'admin_response' => $report->admin_response,
+                'admin_responded_at' => optional($report->admin_responded_at)?->toIso8601String(),
+                'created_at' => $report->created_at->toIso8601String(),
+                'updated_at' => $report->updated_at->toIso8601String(),
+            ]);
+
         $navigationRoutesQuery = NavigationRoute::query()
             ->with('user:id,name', 'points:id,navigation_route_id,latitude,longitude,recorded_at,sequence')
             ->latest('started_at')
@@ -105,6 +123,7 @@ class CatchLogController extends Controller
         return Inertia::render('dashboard', [
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
+            'feedbackReports' => $feedbackReports,
             'subscription' => $this->subscriptionPayload($viewer, $ownCatchLogs->count(), NavigationRoute::query()->where('user_id', $viewerId)->count(), $viewerIsPro),
             'stats' => [
                 'total_catches' => $ownCatchLogs->count(),
@@ -126,7 +145,7 @@ class CatchLogController extends Controller
             }
         }
 
-        Log::info('Fishmap catch save request validated.', [
+        Log::info('TidePilot catch save request validated.', [
             'user_id' => $user?->id,
             'species' => $validated['species'],
             'visibility' => $validated['visibility'],

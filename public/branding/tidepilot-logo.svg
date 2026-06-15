@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="200" viewBox="0 0 760 200" role="img" aria-labelledby="title desc">
+    <title id="title">TidePilot</title>
+    <desc id="desc">TidePilot nautical navigation and fishing logbook logo</desc>
+    <defs>
+        <linearGradient id="markGradient" x1="24" y1="20" x2="164" y2="176" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#67e8f9" />
+            <stop offset="0.48" stop-color="#14b8a6" />
+            <stop offset="1" stop-color="#0f766e" />
+        </linearGradient>
+    </defs>
+    <rect width="760" height="200" fill="none" />
+    <g transform="translate(24 20)">
+        <circle cx="80" cy="80" r="74" fill="#e6fffb" />
+        <circle cx="80" cy="80" r="64" fill="url(#markGradient)" />
+        <path d="M38 104c17 16 42 16 59 0 12-12 31-12 43 0" fill="none" stroke="#ecfeff" stroke-width="12" stroke-linecap="round" />
+        <path d="M40 74c15 13 38 13 53 0 13-11 33-11 46 0" fill="none" stroke="#cffafe" stroke-width="10" stroke-linecap="round" opacity=".86" />
+        <path d="M82 42l34 76-34-18-34 18 34-76z" fill="#082f3a" opacity=".96" />
+        <path d="M82 57l18 40-18-9-18 9 18-40z" fill="#f8fafc" />
+        <circle cx="80" cy="80" r="72" fill="none" stroke="#083344" stroke-width="6" opacity=".18" />
+    </g>
+    <g fill="#0f172a">
+        <text x="210" y="96" font-family="Manrope, Inter, Arial, sans-serif" font-size="58" font-weight="800" letter-spacing="0">TidePilot</text>
+        <text x="214" y="134" font-family="Manrope, Inter, Arial, sans-serif" font-size="22" font-weight="700" letter-spacing="4" fill="#0f766e">GPS ROUTES · TIDES · FISH SPOTS</text>
+    </g>
+</svg>

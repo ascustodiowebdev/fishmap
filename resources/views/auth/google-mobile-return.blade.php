@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Returning to Fishmap</title>
+    <title>Returning to TidePilot</title>
     <style>
         body {
             margin: 0;
@@ -45,9 +45,9 @@
 </head>
 <body>
     <main class="card">
-        <h1>Returning to Fishmap</h1>
+        <h1>Returning to TidePilot</h1>
         <p>If the app does not open automatically, tap the button below.</p>
-        <a class="button" href="{{ $deepLinkUrl }}">Open Fishmap</a>
+        <a class="button" href="{{ $deepLinkUrl }}">Open TidePilot</a>
     </main>
 
     <script>
