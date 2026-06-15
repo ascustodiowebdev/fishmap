@@ -88,7 +88,7 @@ const MAX_TRACK_SPIKE_DISTANCE_METERS = 300;
 const RECENT_SPEED_HOLD_MS = 3500;
 const ACTIVE_TRACKING_INTERVAL_MS = 1000;
 const PASSIVE_TRACKING_INTERVAL_MS = 3000;
-const MAP_TILE_BUFFER = 3;
+const MAP_TILE_BUFFER = 5;
 const parseCoordinate = (value: string | number | null | undefined): number => {
     if (typeof value === 'number') {
         return value;
@@ -142,7 +142,6 @@ export function CatchMap({
     const [showLoadingOverlay, setShowLoadingOverlay] = useState(true);
     const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
     const [baseLayer, setBaseLayer] = useState<BaseLayerMode>('nautical');
-    const [tileRefreshKey, setTileRefreshKey] = useState(0);
     const [showDepthLayer, setShowDepthLayer] = useState(false);
     const [isNarrowBrowserViewport, setIsNarrowBrowserViewport] = useState(false);
     const [currentDepthMeters, setCurrentDepthMeters] = useState<number | null>(null);
@@ -620,7 +619,6 @@ export function CatchMap({
 
     const currentLayerLabel =
         baseLayer === 'street' ? t('dashboard.map_street') : baseLayer === 'nautical' ? t('dashboard.map_nautical') : t('dashboard.map_satellite');
-    const requestTileLayerRefresh = useCallback(() => setTileRefreshKey((current) => current + 1), []);
     const canRenderExternalRasterOverlays = Capacitor.isNativePlatform() || !isNarrowBrowserViewport;
     const shouldRenderSeaMarks = baseLayer === 'nautical' && canRenderExternalRasterOverlays;
     const shouldRenderDepthLayer = showDepthLayer && canRenderExternalRasterOverlays;
@@ -636,17 +634,12 @@ export function CatchMap({
                 markerZoomAnimation={false}
                 className="fishmap-map h-full w-full bg-[#0f172a]"
             >
-                <MapViewport
-                    focusRequest={externalFocusRequest ?? focusRequest}
-                    refreshKey={`${baseLayer}-${showDepthLayer ? 'depth' : 'flat'}`}
-                    onTileRefreshRequest={requestTileLayerRefresh}
-                />
+                <MapViewport focusRequest={externalFocusRequest ?? focusRequest} refreshKey={`${baseLayer}-${showDepthLayer ? 'depth' : 'flat'}`} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
                 <MapBoundsBridge onBoundsChange={onBoundsChange} />
                 <MapClickHandler allowTapSelection={allowTapSelection} onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
 
                 <TileLayer
-                    key={`base-${baseLayer}-${tileRefreshKey}`}
                     attribution={
                         baseLayer === 'satellite' && satelliteKey
                             ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -688,7 +681,6 @@ export function CatchMap({
 
                 {shouldRenderSeaMarks ? (
                     <TileLayer
-                        key={`seamark-${tileRefreshKey}`}
                         attribution='&copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> seamarks'
                         url="https://t1.openseamap.org/seamark/{z}/{x}/{y}.png"
                         keepBuffer={MAP_TILE_BUFFER}
@@ -699,7 +691,6 @@ export function CatchMap({
                 {shouldRenderDepthLayer ? (
                     <>
                         <WMSTileLayer
-                            key={`depth-raster-${tileRefreshKey}`}
                             url={emodnetDepthWmsUrl}
                             layers="emodnet:mean_rainbowcolour"
                             format="image/png"
@@ -709,7 +700,6 @@ export function CatchMap({
                             attribution='Bathymetry: <a href="https://emodnet.ec.europa.eu/en/bathymetry">EMODnet</a>'
                         />
                         <WMSTileLayer
-                            key={`depth-risk-${tileRefreshKey}`}
                             url={emodnetDepthWmsUrl}
                             layers="emodnet:mean_rainbowcolour"
                             format="image/png"
@@ -721,7 +711,6 @@ export function CatchMap({
                             }}
                         />
                         <WMSTileLayer
-                            key={`depth-contours-${tileRefreshKey}`}
                             url={emodnetDepthWmsUrl}
                             layers="emodnet:contours"
                             format="image/png"
@@ -1126,21 +1115,12 @@ function calculateDistanceMeters(start: [number, number], end: [number, number])
     return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function MapViewport({
-    focusRequest,
-    refreshKey,
-    onTileRefreshRequest,
-}: {
-    focusRequest: MapFocusRequest | null;
-    refreshKey: string;
-    onTileRefreshRequest: () => void;
-}) {
+function MapViewport({ focusRequest, refreshKey }: { focusRequest: MapFocusRequest | null; refreshKey: string }) {
     const map = useMap();
     const previousKey = useRef<number | null>(null);
 
     useEffect(() => {
         const timeouts: number[] = [];
-        const tileRefreshTimeouts: number[] = [];
         let animationFrame: number | null = null;
 
         const invalidate = () => {
@@ -1156,7 +1136,6 @@ function MapViewport({
 
         const clearQueuedTimeouts = () => {
             timeouts.splice(0).forEach((timeout) => window.clearTimeout(timeout));
-            tileRefreshTimeouts.splice(0).forEach((timeout) => window.clearTimeout(timeout));
         };
 
         const invalidateAcrossSafariViewportSettling = () => {
@@ -1164,9 +1143,6 @@ function MapViewport({
             invalidate();
             [80, 220, 500, 1000].forEach((delay) => {
                 timeouts.push(window.setTimeout(invalidate, delay));
-            });
-            [360, 1100].forEach((delay) => {
-                tileRefreshTimeouts.push(window.setTimeout(onTileRefreshRequest, delay));
             });
         };
 
@@ -1198,18 +1174,16 @@ function MapViewport({
             visualViewport?.removeEventListener('resize', invalidateAcrossSafariViewportSettling);
             visualViewport?.removeEventListener('scroll', invalidateAcrossSafariViewportSettling);
         };
-    }, [map, onTileRefreshRequest]);
+    }, [map]);
 
     useEffect(() => {
         const invalidate = () => map.invalidateSize({ pan: false, debounceMoveend: false });
         const timeouts = [0, 80, 220, 500].map((delay) => window.setTimeout(invalidate, delay));
-        const tileRefreshTimeout = window.setTimeout(onTileRefreshRequest, 260);
 
         return () => {
             timeouts.forEach((timeout) => window.clearTimeout(timeout));
-            window.clearTimeout(tileRefreshTimeout);
         };
-    }, [map, onTileRefreshRequest, refreshKey]);
+    }, [map, refreshKey]);
 
     useEffect(() => {
         if (!focusRequest || previousKey.current === focusRequest.key) {
