@@ -30,7 +30,7 @@ class SecurityHeaders
                 "script-src 'self' 'unsafe-inline'",
                 "style-src 'self' 'unsafe-inline' https://fonts.bunny.net",
                 "font-src 'self' https://fonts.bunny.net",
-                "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://t1.openseamap.org https://api.maptiler.com https://*.maptiler.com https://ows.emodnet-bathymetry.eu",
+                "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://t1.openseamap.org https://api.maptiler.com https://*.maptiler.com https://ows.emodnet-bathymetry.eu https://*.googleusercontent.com",
                 "connect-src 'self' https://api.open-meteo.com https://tides4fishing.com https://tabuademares.com https://rest.emodnet-bathymetry.eu https://ows.emodnet-bathymetry.eu https://api.maptiler.com https://*.maptiler.com",
             ]),
         );
