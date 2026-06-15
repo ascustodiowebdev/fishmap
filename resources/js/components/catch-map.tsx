@@ -144,6 +144,7 @@ export function CatchMap({
     const [baseLayer, setBaseLayer] = useState<BaseLayerMode>('nautical');
     const [tileRefreshKey, setTileRefreshKey] = useState(0);
     const [showDepthLayer, setShowDepthLayer] = useState(false);
+    const [isNarrowBrowserViewport, setIsNarrowBrowserViewport] = useState(false);
     const [currentDepthMeters, setCurrentDepthMeters] = useState<number | null>(null);
     const [isDepthLoading, setIsDepthLoading] = useState(false);
     const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
@@ -155,6 +156,21 @@ export function CatchMap({
     const satelliteUsageHandlerRef = useRef(onSatelliteUsageTick);
     const lastSpeedSampleRef = useRef<{ position: [number, number]; timestamp: number } | null>(null);
     const lastReportedSpeedRef = useRef<{ speedKmh: number; timestamp: number } | null>(null);
+
+    useEffect(() => {
+        if (Capacitor.isNativePlatform() || typeof window === 'undefined') {
+            setIsNarrowBrowserViewport(false);
+            return;
+        }
+
+        const mediaQuery = window.matchMedia('(max-width: 767px)');
+        const updateViewportMatch = () => setIsNarrowBrowserViewport(mediaQuery.matches);
+
+        updateViewportMatch();
+        mediaQuery.addEventListener('change', updateViewportMatch);
+
+        return () => mediaQuery.removeEventListener('change', updateViewportMatch);
+    }, []);
 
     useEffect(() => {
         currentPositionHandlerRef.current = onCurrentPositionChange;
@@ -605,6 +621,9 @@ export function CatchMap({
     const currentLayerLabel =
         baseLayer === 'street' ? t('dashboard.map_street') : baseLayer === 'nautical' ? t('dashboard.map_nautical') : t('dashboard.map_satellite');
     const requestTileLayerRefresh = useCallback(() => setTileRefreshKey((current) => current + 1), []);
+    const canRenderExternalRasterOverlays = Capacitor.isNativePlatform() || !isNarrowBrowserViewport;
+    const shouldRenderSeaMarks = baseLayer === 'nautical' && canRenderExternalRasterOverlays;
+    const shouldRenderDepthLayer = showDepthLayer && canRenderExternalRasterOverlays;
 
     return (
         <div className="relative h-full w-full overflow-hidden bg-[#0f172a]">
@@ -667,7 +686,7 @@ export function CatchMap({
                     }}
                 />
 
-                {baseLayer === 'nautical' ? (
+                {shouldRenderSeaMarks ? (
                     <TileLayer
                         key={`seamark-${tileRefreshKey}`}
                         attribution='&copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> seamarks'
@@ -677,7 +696,7 @@ export function CatchMap({
                         updateWhenZooming
                     />
                 ) : null}
-                {showDepthLayer ? (
+                {shouldRenderDepthLayer ? (
                     <>
                         <WMSTileLayer
                             key={`depth-raster-${tileRefreshKey}`}
@@ -1005,15 +1024,17 @@ export function CatchMap({
                         <Layers3 className="size-4" />
                         <span className="uppercase">{currentLayerLabel}</span>
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => setShowDepthLayer((value) => !value)}
-                        className={`rounded-full px-3 py-2 text-[11px] font-semibold tracking-[0.12em] uppercase shadow-lg backdrop-blur transition ${
-                            showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/72 text-white'
-                        }`}
-                    >
-                        {t('dashboard.map_depth')}
-                    </button>
+                    {canRenderExternalRasterOverlays ? (
+                        <button
+                            type="button"
+                            onClick={() => setShowDepthLayer((value) => !value)}
+                            className={`rounded-full px-3 py-2 text-[11px] font-semibold tracking-[0.12em] uppercase shadow-lg backdrop-blur transition ${
+                                showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/72 text-white'
+                            }`}
+                        >
+                            {t('dashboard.map_depth')}
+                        </button>
+                    ) : null}
                 </div>
 
                 <div className="hidden gap-2 md:flex">
@@ -1052,15 +1073,17 @@ export function CatchMap({
                             {t('dashboard.map_satellite')}
                         </button>
                     ) : null}
-                    <button
-                        type="button"
-                        onClick={() => setShowDepthLayer((value) => !value)}
-                        className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                            showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
-                        }`}
-                    >
-                        {t('dashboard.map_depth')}
-                    </button>
+                    {canRenderExternalRasterOverlays ? (
+                        <button
+                            type="button"
+                            onClick={() => setShowDepthLayer((value) => !value)}
+                            className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                                showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
+                            }`}
+                        >
+                            {t('dashboard.map_depth')}
+                        </button>
+                    ) : null}
                 </div>
             </div>
         </div>

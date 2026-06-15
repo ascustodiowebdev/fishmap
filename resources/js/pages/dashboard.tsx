@@ -87,6 +87,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
     const { t } = useTranslator();
     const canRecordRoutes = Boolean(auth.user);
     const canSimulateRoutes = Boolean(auth.user?.is_admin);
+    const isNativeRuntime = Capacitor.isNativePlatform();
     const [satelliteSecondsUsed, setSatelliteSecondsUsed] = useState(subscription.usage.satellite_seconds);
     const isPro = subscription.is_pro;
     const satelliteSecondsRemaining = Math.max(0, subscription.limits.satellite_seconds_monthly - satelliteSecondsUsed);
@@ -1535,7 +1536,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, subscription }:
                 </DialogContent>
             </Dialog>
 
-            <div className="flex min-h-svh flex-col p-0 md:h-screen">
+            <div className={`flex flex-col p-0 md:h-screen ${isNativeRuntime ? 'min-h-svh' : 'h-[100dvh] min-h-[100dvh]'}`}>
                 <section className="relative min-h-0 flex-1 overflow-hidden rounded-none bg-[#081217]">
                     <CatchMap
                         catchLogs={catchLogs}
