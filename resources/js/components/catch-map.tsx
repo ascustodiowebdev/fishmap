@@ -1,13 +1,15 @@
 import { useTranslator } from '@/lib/i18n';
 import { type CatchLog, type MapBounds, type MapFocusRequest, type NavigationRoute } from '@/types';
+import { KeepAwake } from '@capacitor-community/keep-awake';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BackgroundGeolocation, type Location as BackgroundLocation } from '@capgo/background-geolocation';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
+import { Fish, Layers3 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap, useMapEvents, WMSTileLayer } from 'react-leaflet';
-import { Fish, Layers3 } from 'lucide-react';
 
 interface CatchMapProps {
     catchLogs: CatchLog[];
@@ -32,6 +34,8 @@ interface CatchMapProps {
     onDeleteRoute: (route: NavigationRoute) => void;
     onStartRouteGuidance: (route: NavigationRoute) => void;
     canRecordRoutes: boolean;
+    canUseSatellite: boolean;
+    onSatelliteUsageTick: (seconds: number) => void;
     keepTrackingInBackground: boolean;
     activeGuidanceRouteId: number | null;
     guidanceNearestPoint: [number, number] | null;
@@ -68,7 +72,7 @@ const shallowRiskSld = `<StyledLayerDescriptor version="1.0.0" xmlns="http://www
   </NamedLayer>
 </StyledLayerDescriptor>`;
 type BaseLayerMode = 'street' | 'nautical' | 'satellite';
-const layerOrder: BaseLayerMode[] = satelliteKey ? ['street', 'nautical', 'satellite'] : ['street', 'nautical'];
+const defaultLayerOrder: BaseLayerMode[] = ['street', 'nautical'];
 type PositionCoordsLike = {
     latitude: number;
     longitude: number;
@@ -78,9 +82,13 @@ type PositionCoordsLike = {
 
 const SPEED_NOISE_FLOOR_KMH = 1.8;
 const MIN_MOVEMENT_FOR_SPEED_METERS = 2;
-const MAX_ACCURACY_FOR_SPEED_METERS = 25;
-const MAX_TRACK_SPIKE_SPEED_KMH = 120;
-const MAX_TRACK_SPIKE_DISTANCE_METERS = 120;
+const MAX_ACCURACY_FOR_DERIVED_SPEED_METERS = 80;
+const MAX_TRACK_SPIKE_SPEED_KMH = 220;
+const MAX_TRACK_SPIKE_DISTANCE_METERS = 300;
+const RECENT_SPEED_HOLD_MS = 3500;
+const ACTIVE_TRACKING_INTERVAL_MS = 1000;
+const PASSIVE_TRACKING_INTERVAL_MS = 3000;
+const MAP_TILE_BUFFER = 5;
 const parseCoordinate = (value: string | number | null | undefined): number => {
     if (typeof value === 'number') {
         return value;
@@ -116,6 +124,8 @@ export function CatchMap({
     onDeleteRoute,
     onStartRouteGuidance,
     canRecordRoutes,
+    canUseSatellite,
+    onSatelliteUsageTick,
     keepTrackingInBackground,
     activeGuidanceRouteId,
     guidanceNearestPoint,
@@ -133,6 +143,9 @@ export function CatchMap({
     const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
     const [baseLayer, setBaseLayer] = useState<BaseLayerMode>('nautical');
     const [showDepthLayer, setShowDepthLayer] = useState(false);
+    const [isNarrowBrowserViewport, setIsNarrowBrowserViewport] = useState(
+        () => !Capacitor.isNativePlatform() && typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+    );
     const [currentDepthMeters, setCurrentDepthMeters] = useState<number | null>(null);
     const [isDepthLoading, setIsDepthLoading] = useState(false);
     const [focusRequest, setFocusRequest] = useState<{ center: [number, number]; key: number } | null>(null);
@@ -141,7 +154,30 @@ export function CatchMap({
     const depthAbortControllerRef = useRef<AbortController | null>(null);
     const currentPositionHandlerRef = useRef(onCurrentPositionChange);
     const currentSpeedHandlerRef = useRef(onCurrentSpeedChange);
+    const satelliteUsageHandlerRef = useRef(onSatelliteUsageTick);
     const lastSpeedSampleRef = useRef<{ position: [number, number]; timestamp: number } | null>(null);
+    const lastReportedSpeedRef = useRef<{ speedKmh: number; timestamp: number } | null>(null);
+
+    useEffect(() => {
+        if (Capacitor.isNativePlatform() || typeof window === 'undefined') {
+            setIsNarrowBrowserViewport(false);
+            return;
+        }
+
+        const mediaQuery = window.matchMedia('(max-width: 767px)');
+        const updateViewportMatch = () => setIsNarrowBrowserViewport(mediaQuery.matches);
+
+        updateViewportMatch();
+        if ('addEventListener' in mediaQuery) {
+            mediaQuery.addEventListener('change', updateViewportMatch);
+
+            return () => mediaQuery.removeEventListener('change', updateViewportMatch);
+        }
+
+        mediaQuery.addListener(updateViewportMatch);
+
+        return () => mediaQuery.removeListener(updateViewportMatch);
+    }, []);
 
     useEffect(() => {
         currentPositionHandlerRef.current = onCurrentPositionChange;
@@ -150,6 +186,48 @@ export function CatchMap({
     useEffect(() => {
         currentSpeedHandlerRef.current = onCurrentSpeedChange;
     }, [onCurrentSpeedChange]);
+
+    useEffect(() => {
+        satelliteUsageHandlerRef.current = onSatelliteUsageTick;
+    }, [onSatelliteUsageTick]);
+
+    const availableLayerOrder = useMemo<BaseLayerMode[]>(
+        () => (satelliteKey && canUseSatellite ? [...defaultLayerOrder, 'satellite'] : defaultLayerOrder),
+        [canUseSatellite],
+    );
+
+    useEffect(() => {
+        const shouldKeepScreenAwake = keepTrackingInBackground || isGuidanceActive;
+
+        if (!shouldKeepScreenAwake) {
+            void KeepAwake.allowSleep().catch(() => undefined);
+            return;
+        }
+
+        void KeepAwake.keepAwake().catch(() => undefined);
+
+        return () => {
+            void KeepAwake.allowSleep().catch(() => undefined);
+        };
+    }, [isGuidanceActive, keepTrackingInBackground]);
+
+    useEffect(() => {
+        if (baseLayer === 'satellite' && (!satelliteKey || !canUseSatellite)) {
+            setBaseLayer('nautical');
+        }
+    }, [baseLayer, canUseSatellite]);
+
+    useEffect(() => {
+        if (baseLayer !== 'satellite') {
+            return;
+        }
+
+        const interval = window.setInterval(() => {
+            satelliteUsageHandlerRef.current(60);
+        }, 60000);
+
+        return () => window.clearInterval(interval);
+    }, [baseLayer]);
 
     const catchPoints = catchLogs
         .filter((catchLog) => catchLog.latitude && catchLog.longitude)
@@ -163,10 +241,12 @@ export function CatchMap({
     useEffect(() => {
         let webWatchId: number | null = null;
         let nativeWatchId: string | null = null;
+        let backgroundWatchActive = false;
         let cancelled = false;
         let isAppActive = true;
+        const isActiveTrackingMode = keepTrackingInBackground || isGuidanceActive;
 
-        const shouldTrack = () => !cancelled && (isAppActive || keepTrackingInBackground);
+        const shouldTrack = () => !cancelled && (isAppActive || isActiveTrackingMode);
 
         const clearTracking = () => {
             if (webWatchId !== null) {
@@ -179,16 +259,21 @@ export function CatchMap({
                 nativeWatchId = null;
             }
 
+            if (backgroundWatchActive) {
+                void BackgroundGeolocation.stop();
+                backgroundWatchActive = false;
+            }
+
             currentSpeedHandlerRef.current(null);
         };
 
-        const applyPosition = (coords: PositionCoordsLike) => {
+        const applyPosition = (coords: PositionCoordsLike, positionTimestamp?: number | null) => {
             if (!shouldTrack()) {
                 return;
             }
 
             const nextPosition: [number, number] = [coords.latitude, coords.longitude];
-            const timestamp = Date.now();
+            const timestamp = typeof positionTimestamp === 'number' && Number.isFinite(positionTimestamp) ? positionTimestamp : Date.now();
             let derivedSpeedKmh: number | null = null;
             const previousSpeedSample = lastSpeedSampleRef.current;
             const recordedAt = new Date(timestamp).toISOString();
@@ -205,10 +290,12 @@ export function CatchMap({
                         return;
                     }
 
-                    if (distanceMeters < MIN_MOVEMENT_FOR_SPEED_METERS || coords.accuracy > MAX_ACCURACY_FOR_SPEED_METERS) {
+                    if (distanceMeters < MIN_MOVEMENT_FOR_SPEED_METERS) {
                         derivedSpeedKmh = 0;
-                    } else {
+                    } else if (coords.accuracy <= MAX_ACCURACY_FOR_DERIVED_SPEED_METERS) {
                         derivedSpeedKmh = nextSpeedKmh;
+                    } else {
+                        derivedSpeedKmh = null;
                     }
                 }
             }
@@ -225,8 +312,20 @@ export function CatchMap({
             const nativeSpeedKmh =
                 typeof coords.speed === 'number' && Number.isFinite(coords.speed) && coords.speed > 0.15 ? Math.max(coords.speed * 3.6, 0) : null;
             const rawSpeedKmh = nativeSpeedKmh ?? derivedSpeedKmh;
-            const smoothedSpeedKmh =
-                rawSpeedKmh !== null && (rawSpeedKmh < SPEED_NOISE_FLOOR_KMH || coords.accuracy > MAX_ACCURACY_FOR_SPEED_METERS) ? 0 : rawSpeedKmh;
+            let smoothedSpeedKmh = rawSpeedKmh !== null && rawSpeedKmh < SPEED_NOISE_FLOOR_KMH ? 0 : rawSpeedKmh;
+
+            if (
+                smoothedSpeedKmh === null &&
+                lastReportedSpeedRef.current &&
+                timestamp - lastReportedSpeedRef.current.timestamp <= RECENT_SPEED_HOLD_MS
+            ) {
+                smoothedSpeedKmh = lastReportedSpeedRef.current.speedKmh;
+            }
+
+            if (smoothedSpeedKmh !== null) {
+                lastReportedSpeedRef.current = { speedKmh: smoothedSpeedKmh, timestamp };
+            }
+
             currentSpeedHandlerRef.current(smoothedSpeedKmh);
 
             if (!hasAutoCenteredRef.current) {
@@ -236,6 +335,18 @@ export function CatchMap({
                     key: Date.now(),
                 });
             }
+        };
+
+        const applyBackgroundLocation = (location: BackgroundLocation) => {
+            applyPosition(
+                {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    accuracy: location.accuracy,
+                    speed: location.speed,
+                },
+                location.time,
+            );
         };
 
         const startWebTracking = () => {
@@ -257,12 +368,12 @@ export function CatchMap({
 
             const requestPosition = (enableHighAccuracy = true) => {
                 navigator.geolocation.getCurrentPosition(
-                    ({ coords }) => applyPosition(coords),
+                    ({ coords, timestamp }) => applyPosition(coords, timestamp),
                     () => undefined,
                     {
                         enableHighAccuracy,
-                        maximumAge: isGuidanceActive ? 1000 : 5000,
-                        timeout: isGuidanceActive ? 8000 : 12000,
+                        maximumAge: isActiveTrackingMode ? 0 : 2000,
+                        timeout: isActiveTrackingMode ? 8000 : 12000,
                     },
                 );
             };
@@ -270,8 +381,8 @@ export function CatchMap({
             requestPosition();
 
             webWatchId = navigator.geolocation.watchPosition(
-                ({ coords }) => {
-                    applyPosition(coords);
+                ({ coords, timestamp }) => {
+                    applyPosition(coords, timestamp);
                 },
                 (error) => {
                     if (error.code === error.TIMEOUT || error.code === error.POSITION_UNAVAILABLE) {
@@ -280,10 +391,44 @@ export function CatchMap({
                 },
                 {
                     enableHighAccuracy: true,
-                    maximumAge: 3000,
-                    timeout: 12000,
+                    maximumAge: isActiveTrackingMode ? 0 : 2000,
+                    timeout: isActiveTrackingMode ? 8000 : 12000,
                 },
             );
+        };
+
+        const startNativeBackgroundTracking = async () => {
+            if (!shouldTrack()) {
+                return;
+            }
+
+            try {
+                await BackgroundGeolocation.start(
+                    {
+                        backgroundTitle: 'NautiBite navigation',
+                        backgroundMessage: 'NautiBite is recording your position for navigation.',
+                        requestPermissions: true,
+                        stale: false,
+                        distanceFilter: 0,
+                    },
+                    (position, error) => {
+                        if (error) {
+                            currentPositionHandlerRef.current(null);
+                            currentSpeedHandlerRef.current(null);
+                            return;
+                        }
+
+                        if (!shouldTrack() || !position) {
+                            return;
+                        }
+
+                        applyBackgroundLocation(position);
+                    },
+                );
+                backgroundWatchActive = true;
+            } catch {
+                startWebTracking();
+            }
         };
 
         const startNativeTracking = async () => {
@@ -302,26 +447,28 @@ export function CatchMap({
 
                 const current = await Geolocation.getCurrentPosition({
                     enableHighAccuracy: true,
-                    timeout: isGuidanceActive ? 8000 : 12000,
-                    maximumAge: isGuidanceActive ? 1000 : 5000,
+                    timeout: isActiveTrackingMode ? 8000 : 12000,
+                    maximumAge: isActiveTrackingMode ? 0 : 2000,
                 });
 
                 if (!cancelled) {
-                    applyPosition(current.coords);
+                    applyPosition(current.coords, current.timestamp);
                 }
 
                 nativeWatchId = await Geolocation.watchPosition(
                     {
                         enableHighAccuracy: true,
-                        timeout: 12000,
-                        maximumAge: 3000,
+                        timeout: isActiveTrackingMode ? ACTIVE_TRACKING_INTERVAL_MS : 10000,
+                        maximumAge: isActiveTrackingMode ? 0 : 2000,
+                        interval: isActiveTrackingMode ? ACTIVE_TRACKING_INTERVAL_MS : PASSIVE_TRACKING_INTERVAL_MS,
+                        minimumUpdateInterval: isActiveTrackingMode ? ACTIVE_TRACKING_INTERVAL_MS : PASSIVE_TRACKING_INTERVAL_MS,
                     },
                     (position) => {
                         if (!shouldTrack() || !position) {
                             return;
                         }
 
-                        applyPosition(position.coords);
+                        applyPosition(position.coords, position.timestamp);
                     },
                 );
 
@@ -341,7 +488,9 @@ export function CatchMap({
                 return;
             }
 
-            if (Capacitor.isNativePlatform()) {
+            if (Capacitor.isNativePlatform() && isActiveTrackingMode) {
+                void startNativeBackgroundTracking();
+            } else if (Capacitor.isNativePlatform()) {
                 void startNativeTracking();
             } else {
                 startWebTracking();
@@ -355,7 +504,7 @@ export function CatchMap({
                   isAppActive = isActive;
 
                   if (!isAppActive) {
-                      if (!keepTrackingInBackground) {
+                      if (!isActiveTrackingMode) {
                           clearTracking();
                       }
                       return;
@@ -369,6 +518,7 @@ export function CatchMap({
             cancelled = true;
             clearTracking();
             lastSpeedSampleRef.current = null;
+            lastReportedSpeedRef.current = null;
 
             if (appStateListenerPromise) {
                 void appStateListenerPromise.then((listener) => listener.remove());
@@ -474,18 +624,34 @@ export function CatchMap({
     }, [displayedPosition, locationAccuracy, positionOverride]);
 
     const cycleLayer = () => {
-        const currentIndex = layerOrder.indexOf(baseLayer);
-        const nextLayer = layerOrder[(currentIndex + 1) % layerOrder.length];
+        const currentIndex = availableLayerOrder.indexOf(baseLayer);
+        const nextLayer = availableLayerOrder[(currentIndex + 1) % availableLayerOrder.length];
         setBaseLayer(nextLayer);
     };
 
     const currentLayerLabel =
         baseLayer === 'street' ? t('dashboard.map_street') : baseLayer === 'nautical' ? t('dashboard.map_nautical') : t('dashboard.map_satellite');
+    const canRenderExternalRasterOverlays = Capacitor.isNativePlatform() || !isNarrowBrowserViewport;
+    const shouldRenderSeaMarks = baseLayer === 'nautical' && canRenderExternalRasterOverlays;
+    const shouldRenderDepthLayer = showDepthLayer && canRenderExternalRasterOverlays;
+    const mobileBrowserTileMode = isNarrowBrowserViewport && !Capacitor.isNativePlatform();
+    const mapClassName = `fishmap-map h-full w-full ${mobileBrowserTileMode ? 'fishmap-map--mobile-browser' : 'bg-[#0f172a]'}`;
+    const tileKeepBuffer = mobileBrowserTileMode ? 8 : MAP_TILE_BUFFER;
+    const tileUpdateInterval = mobileBrowserTileMode ? 80 : 200;
 
     return (
-        <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[#0f172a] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
-            <MapContainer center={initialCenter} zoom={catchPoints.length > 0 ? 8 : 11} scrollWheelZoom zoomControl={false} className="fishmap-map h-full w-full bg-[#0f172a]">
-                <MapViewport focusRequest={externalFocusRequest ?? focusRequest} />
+        <div className="relative h-full w-full overflow-hidden bg-[#0f172a]">
+            <MapContainer
+                center={initialCenter}
+                zoom={catchPoints.length > 0 ? 8 : 11}
+                scrollWheelZoom
+                zoomControl={false}
+                fadeAnimation={false}
+                zoomAnimation={!mobileBrowserTileMode}
+                markerZoomAnimation={false}
+                className={mapClassName}
+            >
+                <MapViewport focusRequest={externalFocusRequest ?? focusRequest} refreshKey={`${baseLayer}-${showDepthLayer ? 'depth' : 'flat'}`} />
                 <MapInteractionBridge onInteractionChange={onInteractionChange} />
                 <MapBoundsBridge onBoundsChange={onBoundsChange} />
                 <MapClickHandler allowTapSelection={allowTapSelection} onSelectPosition={onSelectPosition} onLongPress={onLongPress} />
@@ -501,7 +667,8 @@ export function CatchMap({
                             ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=${satelliteKey}`
                             : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
                     }
-                    keepBuffer={8}
+                    keepBuffer={tileKeepBuffer}
+                    updateInterval={tileUpdateInterval}
                     updateWhenIdle={false}
                     updateWhenZooming
                     eventHandlers={{
@@ -530,16 +697,17 @@ export function CatchMap({
                     }}
                 />
 
-                {baseLayer === 'nautical' ? (
+                {shouldRenderSeaMarks ? (
                     <TileLayer
                         attribution='&copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> seamarks'
                         url="https://t1.openseamap.org/seamark/{z}/{x}/{y}.png"
-                        keepBuffer={8}
+                        keepBuffer={tileKeepBuffer}
+                        updateInterval={tileUpdateInterval}
                         updateWhenIdle={false}
                         updateWhenZooming
                     />
                 ) : null}
-                {showDepthLayer ? (
+                {shouldRenderDepthLayer ? (
                     <>
                         <WMSTileLayer
                             url={emodnetDepthWmsUrl}
@@ -601,8 +769,8 @@ export function CatchMap({
                                 {positionOverride
                                     ? t('dashboard.simulated_position')
                                     : locationAccuracy
-                                    ? t('dashboard.you_are_here_accuracy', { accuracy: locationAccuracy })
-                                    : t('dashboard.you_are_here')}
+                                      ? t('dashboard.you_are_here_accuracy', { accuracy: locationAccuracy })
+                                      : t('dashboard.you_are_here')}
                             </Popup>
                             {showDepthLayer ? (
                                 <Tooltip permanent direction="top" offset={[0, -12]}>
@@ -647,16 +815,24 @@ export function CatchMap({
                             <div className="fishmap-popup-card">
                                 <div className="space-y-1">
                                     <p className="fishmap-popup-title">{route.name}</p>
-                                    <p className="fishmap-popup-copy">
-                                        {t('dashboard.route_points', { count: route.point_count })}
-                                    </p>
+                                    <p className="fishmap-popup-copy">{t('dashboard.route_points', { count: route.point_count })}</p>
                                     {route.owner_name && !route.is_owner ? (
                                         <p className="fishmap-popup-copy">{t('dashboard.shared_by', { name: route.owner_name })}</p>
                                     ) : null}
                                 </div>
 
                                 <div className="fishmap-popup-actions">
-                                    <button type="button" className="fishmap-popup-button fishmap-popup-button--secondary" onClick={() => onStartRouteGuidance(route)}>
+                                    <button
+                                        type="button"
+                                        className="fishmap-popup-button fishmap-popup-button--secondary"
+                                        onClick={(event) => {
+                                            event.currentTarget
+                                                .closest('.leaflet-popup')
+                                                ?.querySelector<HTMLAnchorElement>('.leaflet-popup-close-button')
+                                                ?.click();
+                                            onStartRouteGuidance(route);
+                                        }}
+                                    >
                                         {t('dashboard.guide_route')}
                                     </button>
                                     {(route.can_manage ?? route.is_owner) && canRecordRoutes ? (
@@ -809,7 +985,9 @@ export function CatchMap({
                                     <p className="fishmap-popup-copy">
                                         {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
                                     </p>
-                                    {catchLog.bait_used ? <p className="fishmap-popup-copy">{t('dashboard.bait_prefix', { bait: catchLog.bait_used })}</p> : null}
+                                    {catchLog.bait_used ? (
+                                        <p className="fishmap-popup-copy">{t('dashboard.bait_prefix', { bait: catchLog.bait_used })}</p>
+                                    ) : null}
                                     {catchLog.notes ? <p className="fishmap-popup-copy">{catchLog.notes}</p> : null}
                                 </div>
                                 {catchLog.is_owner ? (
@@ -854,15 +1032,17 @@ export function CatchMap({
                         <Layers3 className="size-4" />
                         <span className="uppercase">{currentLayerLabel}</span>
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => setShowDepthLayer((value) => !value)}
-                        className={`rounded-full px-3 py-2 text-[11px] font-semibold tracking-[0.12em] uppercase shadow-lg backdrop-blur transition ${
-                            showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/72 text-white'
-                        }`}
-                    >
-                        {t('dashboard.map_depth')}
-                    </button>
+                    {canRenderExternalRasterOverlays ? (
+                        <button
+                            type="button"
+                            onClick={() => setShowDepthLayer((value) => !value)}
+                            className={`rounded-full px-3 py-2 text-[11px] font-semibold tracking-[0.12em] uppercase shadow-lg backdrop-blur transition ${
+                                showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/72 text-white'
+                            }`}
+                        >
+                            {t('dashboard.map_depth')}
+                        </button>
+                    ) : null}
                 </div>
 
                 <div className="hidden gap-2 md:flex">
@@ -870,9 +1050,7 @@ export function CatchMap({
                         type="button"
                         onClick={() => setBaseLayer('street')}
                         className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                            baseLayer === 'street'
-                                ? 'bg-white text-slate-950'
-                                : 'border border-white/15 bg-slate-900/70 text-white/80'
+                            baseLayer === 'street' ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
                         }`}
                     >
                         {t('dashboard.map_street')}
@@ -881,35 +1059,33 @@ export function CatchMap({
                         type="button"
                         onClick={() => setBaseLayer('nautical')}
                         className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                            baseLayer === 'nautical'
-                                ? 'bg-white text-slate-950'
-                                : 'border border-white/15 bg-slate-900/70 text-white/80'
+                            baseLayer === 'nautical' ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
                         }`}
                     >
                         {t('dashboard.map_nautical')}
                     </button>
-                    {satelliteKey ? (
+                    {satelliteKey && canUseSatellite ? (
                         <button
                             type="button"
                             onClick={() => setBaseLayer('satellite')}
                             className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                                baseLayer === 'satellite'
-                                    ? 'bg-white text-slate-950'
-                                    : 'border border-white/15 bg-slate-900/70 text-white/80'
+                                baseLayer === 'satellite' ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
                             }`}
                         >
                             {t('dashboard.map_satellite')}
                         </button>
                     ) : null}
-                    <button
-                        type="button"
-                        onClick={() => setShowDepthLayer((value) => !value)}
-                        className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                            showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
-                        }`}
-                    >
-                        {t('dashboard.map_depth')}
-                    </button>
+                    {canRenderExternalRasterOverlays ? (
+                        <button
+                            type="button"
+                            onClick={() => setShowDepthLayer((value) => !value)}
+                            className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
+                                showDepthLayer ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
+                            }`}
+                        >
+                            {t('dashboard.map_depth')}
+                        </button>
+                    ) : null}
                 </div>
             </div>
         </div>
@@ -945,33 +1121,80 @@ function calculateDistanceMeters(start: [number, number], end: [number, number])
     const lat1 = toRadians(start[0]);
     const lat2 = toRadians(end[0]);
 
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
 
     return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null }) {
+function MapViewport({ focusRequest, refreshKey }: { focusRequest: MapFocusRequest | null; refreshKey: string }) {
     const map = useMap();
     const previousKey = useRef<number | null>(null);
 
     useEffect(() => {
-        const invalidate = () => map.invalidateSize({ pan: false, debounceMoveend: true });
+        const timeouts: number[] = [];
+        let animationFrame: number | null = null;
 
-        invalidate();
+        const invalidate = () => {
+            if (animationFrame !== null) {
+                window.cancelAnimationFrame(animationFrame);
+            }
 
-        const immediate = window.setTimeout(invalidate, 0);
-        const delayed = window.setTimeout(invalidate, 250);
+            animationFrame = window.requestAnimationFrame(() => {
+                animationFrame = null;
+                map.invalidateSize({ pan: false, debounceMoveend: false });
+            });
+        };
 
-        window.addEventListener('resize', invalidate);
+        const clearQueuedTimeouts = () => {
+            timeouts.splice(0).forEach((timeout) => window.clearTimeout(timeout));
+        };
+
+        const invalidateAcrossSafariViewportSettling = () => {
+            clearQueuedTimeouts();
+            invalidate();
+            [80, 220, 500, 1000].forEach((delay) => {
+                timeouts.push(window.setTimeout(invalidate, delay));
+            });
+        };
+
+        const container = map.getContainer();
+        const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(invalidateAcrossSafariViewportSettling) : null;
+        const visualViewport = window.visualViewport;
+
+        resizeObserver?.observe(container);
+        map.whenReady(invalidateAcrossSafariViewportSettling);
+        invalidateAcrossSafariViewportSettling();
+
+        window.addEventListener('resize', invalidateAcrossSafariViewportSettling);
+        window.addEventListener('orientationchange', invalidateAcrossSafariViewportSettling);
+        window.addEventListener('pageshow', invalidateAcrossSafariViewportSettling);
+        visualViewport?.addEventListener('resize', invalidateAcrossSafariViewportSettling);
+        visualViewport?.addEventListener('scroll', invalidateAcrossSafariViewportSettling);
 
         return () => {
-            window.clearTimeout(immediate);
-            window.clearTimeout(delayed);
-            window.removeEventListener('resize', invalidate);
+            clearQueuedTimeouts();
+
+            if (animationFrame !== null) {
+                window.cancelAnimationFrame(animationFrame);
+            }
+
+            resizeObserver?.disconnect();
+            window.removeEventListener('resize', invalidateAcrossSafariViewportSettling);
+            window.removeEventListener('orientationchange', invalidateAcrossSafariViewportSettling);
+            window.removeEventListener('pageshow', invalidateAcrossSafariViewportSettling);
+            visualViewport?.removeEventListener('resize', invalidateAcrossSafariViewportSettling);
+            visualViewport?.removeEventListener('scroll', invalidateAcrossSafariViewportSettling);
         };
     }, [map]);
+
+    useEffect(() => {
+        const invalidate = () => map.invalidateSize({ pan: false, debounceMoveend: false });
+        const timeouts = [0, 80, 220, 500].map((delay) => window.setTimeout(invalidate, delay));
+
+        return () => {
+            timeouts.forEach((timeout) => window.clearTimeout(timeout));
+        };
+    }, [map, refreshKey]);
 
     useEffect(() => {
         if (!focusRequest || previousKey.current === focusRequest.key) {
@@ -979,6 +1202,10 @@ function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null })
         }
 
         previousKey.current = focusRequest.key;
+        let settleTimer: number | null = null;
+        const invalidateAfterAnimation = () => {
+            settleTimer = window.setTimeout(() => map.invalidateSize({ pan: false, debounceMoveend: false }), 420);
+        };
 
         if (focusRequest.bounds) {
             map.fitBounds(focusRequest.bounds, {
@@ -986,7 +1213,12 @@ function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null })
                 duration: 0.35,
                 padding: [36, 36],
             });
-            return;
+            invalidateAfterAnimation();
+            return () => {
+                if (settleTimer !== null) {
+                    window.clearTimeout(settleTimer);
+                }
+            };
         }
 
         if (focusRequest.center) {
@@ -994,7 +1226,14 @@ function MapViewport({ focusRequest }: { focusRequest: MapFocusRequest | null })
                 animate: true,
                 duration: 0.35,
             });
+            invalidateAfterAnimation();
         }
+
+        return () => {
+            if (settleTimer !== null) {
+                window.clearTimeout(settleTimer);
+            }
+        };
     }, [focusRequest, map]);
 
     return null;
@@ -1055,32 +1294,41 @@ function MapClickHandler({
 }) {
     const map = useMap();
     const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pressStart = useRef<{ position: [number, number]; pointX: number; pointY: number; moved: boolean; pointerType: 'mouse' | 'touch' | 'pen' } | null>(null);
+    const pressStart = useRef<{
+        position: [number, number];
+        pointX: number;
+        pointY: number;
+        moved: boolean;
+        pointerType: 'mouse' | 'touch' | 'pen';
+    } | null>(null);
     const longPressTriggered = useRef(false);
 
-    const beginHold = useCallback((position: [number, number], pointX: number, pointY: number, pointerType: 'mouse' | 'touch' | 'pen') => {
-        if (holdTimer.current) {
-            clearTimeout(holdTimer.current);
-        }
-
-        pressStart.current = {
-            position,
-            pointX,
-            pointY,
-            moved: false,
-            pointerType,
-        };
-        longPressTriggered.current = false;
-
-        holdTimer.current = setTimeout(() => {
-            if (!pressStart.current || pressStart.current.moved) {
-                return;
+    const beginHold = useCallback(
+        (position: [number, number], pointX: number, pointY: number, pointerType: 'mouse' | 'touch' | 'pen') => {
+            if (holdTimer.current) {
+                clearTimeout(holdTimer.current);
             }
 
-            longPressTriggered.current = true;
-            onLongPress(pressStart.current.position);
-        }, 1000);
-    }, [onLongPress]);
+            pressStart.current = {
+                position,
+                pointX,
+                pointY,
+                moved: false,
+                pointerType,
+            };
+            longPressTriggered.current = false;
+
+            holdTimer.current = setTimeout(() => {
+                if (!pressStart.current || pressStart.current.moved) {
+                    return;
+                }
+
+                longPressTriggered.current = true;
+                onLongPress(pressStart.current.position);
+            }, 1000);
+        },
+        [onLongPress],
+    );
 
     const cancelHold = useCallback(() => {
         if (holdTimer.current) {
@@ -1099,11 +1347,7 @@ function MapClickHandler({
                 return false;
             }
 
-            return Boolean(
-                target.closest(
-                    '.leaflet-marker-icon, .leaflet-popup, .leaflet-control, .leaflet-interactive, .leaflet-marker-pane',
-                ),
-            );
+            return Boolean(target.closest('.leaflet-marker-icon, .leaflet-popup, .leaflet-control, .leaflet-interactive, .leaflet-marker-pane'));
         };
 
         const startFromPointer = (clientX: number, clientY: number, target: EventTarget | null, pointerType: 'mouse' | 'touch' | 'pen') => {

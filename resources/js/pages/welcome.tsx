@@ -132,6 +132,12 @@ export default function Welcome() {
                             ))}
                         </section>
                     </main>
+
+                    <footer className="border-t border-slate-200/80 py-5 text-sm text-slate-600">
+                        <Link href={route('privacy')} className="font-medium transition hover:text-slate-950">
+                            {t('welcome.privacy')}
+                        </Link>
+                    </footer>
                 </div>
             </div>
         </>

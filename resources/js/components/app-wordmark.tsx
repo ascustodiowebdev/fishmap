@@ -1,13 +1,10 @@
 import { cn } from '@/lib/utils';
 
-export default function AppWordmark({ className, alt = 'Fishmap' }: { className?: string; alt?: string }) {
+export default function AppWordmark({ className, alt = 'NautiBite' }: { className?: string; alt?: string }) {
     return (
-        <span className={cn('relative inline-flex overflow-hidden [aspect-ratio:3.8/1]', className)}>
-            <img
-                src="/branding/fishmap-logo.svg"
-                alt={alt}
-                className="absolute top-1/2 left-0 h-[88%] w-full max-w-none -translate-y-1/2 origin-left scale-[3.05] object-contain object-left"
-            />
+        <span className={cn('inline-flex items-center gap-2 overflow-hidden', className)}>
+            <img src="/branding/nautibite-logo.svg" alt={alt} className="h-full shrink-0 object-contain" />
+            <span className="truncate text-lg font-semibold text-current">NautiBite</span>
         </span>
     );
 }

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AppSetting;
+use App\Models\BugReport;
 use App\Models\CatchLog;
 use App\Models\NavigationRoute;
 use App\Models\User;
@@ -14,17 +15,35 @@ use Inertia\Response;
 
 class AdminController extends Controller
 {
+    private const ADMIN_PER_PAGE = 25;
+
+    private const ADMIN_BULK_DELETE_LIMIT = 200;
+
+    private const ADMIN_BUG_REPORTS_PER_PAGE = 25;
+
+    private const ADMIN_ROUTE_POINT_PREVIEW_LIMIT = 40;
+
     public function index(): Response
     {
+        $userCount = User::query()->count();
+        $catchLogCount = CatchLog::query()->count();
+        $navigationRouteCount = NavigationRoute::query()->count();
+        $bugReportCount = BugReport::query()->count();
+        $openBugReportCount = BugReport::query()->whereIn('status', ['open', 'reviewing'])->count();
+
         $users = User::query()
             ->withCount(['catchLogs', 'navigationRoutes'])
             ->latest()
-            ->get()
-            ->map(fn (User $user) => [
+            ->paginate(self::ADMIN_PER_PAGE, ['*'], 'users_page')
+            ->withQueryString()
+            ->through(fn (User $user) => [
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
                 'is_admin' => $user->is_admin,
+                'is_pro' => $user->isPro(),
+                'pro_lifetime' => (bool) $user->pro_lifetime,
+                'pro_expires_at' => optional($user->pro_expires_at)?->toIso8601String(),
                 'email_verified_at' => optional($user->email_verified_at)?->toIso8601String(),
                 'created_at' => $user->created_at->toIso8601String(),
                 'updated_at' => $user->updated_at->toIso8601String(),
@@ -36,8 +55,9 @@ class AdminController extends Controller
             ->with('user:id,name,email')
             ->latest('caught_at')
             ->latest()
-            ->get()
-            ->map(fn (CatchLog $catchLog) => [
+            ->paginate(self::ADMIN_PER_PAGE, ['*'], 'catches_page')
+            ->withQueryString()
+            ->through(fn (CatchLog $catchLog) => [
                 'id' => $catchLog->id,
                 'species' => $catchLog->species,
                 'bait_used' => $catchLog->bait_used,
@@ -59,11 +79,12 @@ class AdminController extends Controller
             ]);
 
         $navigationRoutes = NavigationRoute::query()
-            ->with('user:id,name,email', 'points:id,navigation_route_id,sequence,latitude,longitude,recorded_at')
+            ->with('user:id,name,email')
             ->latest('started_at')
             ->latest()
-            ->get()
-            ->map(fn (NavigationRoute $route) => [
+            ->paginate(self::ADMIN_PER_PAGE, ['*'], 'routes_page')
+            ->withQueryString()
+            ->through(fn (NavigationRoute $route) => [
                 'id' => $route->id,
                 'name' => $route->name,
                 'visibility' => $route->visibility,
@@ -81,24 +102,41 @@ class AdminController extends Controller
                     'name' => $route->user?->name,
                     'email' => $route->user?->email,
                 ],
-                'points' => $route->points->map(fn ($point) => [
-                    'sequence' => $point->sequence,
-                    'latitude' => (string) $point->latitude,
-                    'longitude' => (string) $point->longitude,
-                    'recorded_at' => optional($point->recorded_at)?->toIso8601String(),
-                ])->values(),
+                'points_preview_count' => min($route->point_count, self::ADMIN_ROUTE_POINT_PREVIEW_LIMIT),
+                'points' => $route->points()
+                    ->select('sequence', 'latitude', 'longitude', 'recorded_at')
+                    ->orderBy('sequence')
+                    ->limit(self::ADMIN_ROUTE_POINT_PREVIEW_LIMIT)
+                    ->get()
+                    ->map(fn ($point) => [
+                        'sequence' => $point->sequence,
+                        'latitude' => (string) $point->latitude,
+                        'longitude' => (string) $point->longitude,
+                        'recorded_at' => optional($point->recorded_at)?->toIso8601String(),
+                    ])->values(),
             ]);
 
         return Inertia::render('admin/index', [
             'maintenanceMode' => AppSetting::getBoolean('maintenance_mode'),
             'registrationsOpen' => AppSetting::getBoolean('registrations_open', true),
+            'proSettings' => [
+                'monthly_price_eur' => AppSetting::getString('pro_monthly_price_eur', '3.99'),
+                'annual_price_eur' => AppSetting::getString('pro_annual_price_eur', '29.99'),
+                'lifetime_price_eur' => AppSetting::getString('pro_lifetime_price_eur', ''),
+                'free_spot_limit' => AppSetting::getString('free_spot_limit', '5'),
+                'free_route_limit' => AppSetting::getString('free_route_limit', '3'),
+                'free_satellite_hours_monthly' => (string) round(AppSetting::getInt('free_satellite_seconds_monthly', 10800) / 3600, 2),
+            ],
             'users' => $users,
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
+            'perPage' => self::ADMIN_PER_PAGE,
             'stats' => [
-                'users' => $users->count(),
-                'catches' => $catchLogs->count(),
-                'routes' => $navigationRoutes->count(),
+                'users' => $userCount,
+                'catches' => $catchLogCount,
+                'routes' => $navigationRouteCount,
+                'bug_reports' => $bugReportCount,
+                'open_bug_reports' => $openBugReportCount,
             ],
         ]);
     }
@@ -129,6 +167,129 @@ class AdminController extends Controller
             : 'New registrations are now disabled.');
     }
 
+    public function updateProSettings(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'monthly_price_eur' => ['required', 'numeric', 'min:0', 'max:999'],
+            'annual_price_eur' => ['nullable', 'numeric', 'min:0', 'max:9999'],
+            'lifetime_price_eur' => ['nullable', 'numeric', 'min:0', 'max:9999'],
+            'free_spot_limit' => ['required', 'integer', 'min:0', 'max:1000'],
+            'free_route_limit' => ['required', 'integer', 'min:0', 'max:1000'],
+            'free_satellite_hours_monthly' => ['required', 'numeric', 'min:0', 'max:744'],
+        ]);
+
+        AppSetting::setValue('pro_monthly_price_eur', number_format((float) $validated['monthly_price_eur'], 2, '.', ''));
+        AppSetting::setValue('pro_annual_price_eur', isset($validated['annual_price_eur']) && $validated['annual_price_eur'] !== null
+            ? number_format((float) $validated['annual_price_eur'], 2, '.', '')
+            : '');
+        AppSetting::setValue('pro_lifetime_price_eur', isset($validated['lifetime_price_eur']) && $validated['lifetime_price_eur'] !== null
+            ? number_format((float) $validated['lifetime_price_eur'], 2, '.', '')
+            : '');
+        AppSetting::setValue('free_spot_limit', $validated['free_spot_limit']);
+        AppSetting::setValue('free_route_limit', $validated['free_route_limit']);
+        AppSetting::setValue('free_satellite_seconds_monthly', (int) round((float) $validated['free_satellite_hours_monthly'] * 3600));
+
+        return back()->with('success', 'Pro pricing and free limits updated.');
+    }
+
+    public function bugReports(): Response
+    {
+        $bugReports = BugReport::query()
+            ->with('user:id,name,email', 'adminResponder:id,name,email')
+            ->latest()
+            ->paginate(self::ADMIN_BUG_REPORTS_PER_PAGE)
+            ->withQueryString()
+            ->through(fn (BugReport $report) => [
+                'id' => $report->id,
+                'category' => $report->category,
+                'subject' => $report->subject,
+                'message' => $report->message,
+                'status' => $report->status,
+                'admin_response' => $report->admin_response,
+                'admin_responded_at' => optional($report->admin_responded_at)?->toIso8601String(),
+                'client_platform' => $report->client_platform,
+                'client_context' => $report->client_context,
+                'created_at' => $report->created_at->toIso8601String(),
+                'updated_at' => $report->updated_at->toIso8601String(),
+                'user' => [
+                    'id' => $report->user?->id,
+                    'name' => $report->user?->name,
+                    'email' => $report->user?->email,
+                ],
+                'admin_responder' => [
+                    'id' => $report->adminResponder?->id,
+                    'name' => $report->adminResponder?->name,
+                    'email' => $report->adminResponder?->email,
+                ],
+            ]);
+
+        return Inertia::render('admin/bug-reports', [
+            'bugReports' => $bugReports,
+            'stats' => [
+                'total' => BugReport::query()->count(),
+                'open' => BugReport::query()->whereIn('status', ['open', 'reviewing'])->count(),
+                'fixed' => BugReport::query()->where('status', 'fixed')->count(),
+            ],
+        ]);
+    }
+
+    public function updateBugReport(Request $request, BugReport $bugReport): RedirectResponse
+    {
+        $validated = $request->validate([
+            'status' => ['required', 'in:open,reviewing,fixed,closed'],
+            'admin_response' => ['nullable', 'string', 'max:5000'],
+        ]);
+
+        $hasResponse = filled($validated['admin_response'] ?? null);
+
+        $bugReport->forceFill([
+            'status' => $validated['status'],
+            'admin_response' => $hasResponse ? trim($validated['admin_response']) : null,
+            'admin_responder_id' => $hasResponse ? $request->user()?->id : null,
+            'admin_responded_at' => $hasResponse ? now() : null,
+        ])->save();
+
+        return back()->with('success', 'Bug report updated.');
+    }
+
+    public function updateUserPro(Request $request, User $user): RedirectResponse
+    {
+        $validated = $request->validate([
+            'mode' => ['required', 'in:revoke,month,year,lifetime'],
+        ]);
+
+        $payload = match ($validated['mode']) {
+            'month' => [
+                'pro_lifetime' => false,
+                'pro_expires_at' => now()->addMonth(),
+                'pro_granted_at' => now(),
+                'pro_granted_by_admin_id' => $request->user()?->id,
+            ],
+            'year' => [
+                'pro_lifetime' => false,
+                'pro_expires_at' => now()->addYear(),
+                'pro_granted_at' => now(),
+                'pro_granted_by_admin_id' => $request->user()?->id,
+            ],
+            'lifetime' => [
+                'pro_lifetime' => true,
+                'pro_expires_at' => null,
+                'pro_granted_at' => now(),
+                'pro_granted_by_admin_id' => $request->user()?->id,
+            ],
+            default => [
+                'pro_lifetime' => false,
+                'pro_expires_at' => null,
+                'pro_granted_at' => null,
+                'pro_granted_by_admin_id' => null,
+            ],
+        };
+
+        $user->forceFill($payload)->save();
+
+        return back()->with('success', "Pro status updated for {$user->email}.");
+    }
+
     public function destroyCatchLog(CatchLog $catchLog): RedirectResponse
     {
         $catchLog->delete();
@@ -139,7 +300,7 @@ class AdminController extends Controller
     public function bulkDestroyCatchLogs(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
+            'ids' => ['required', 'array', 'min:1', 'max:'.self::ADMIN_BULK_DELETE_LIMIT],
             'ids.*' => ['integer', 'exists:catch_logs,id'],
         ]);
 
@@ -160,7 +321,7 @@ class AdminController extends Controller
     public function bulkDestroyNavigationRoutes(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
+            'ids' => ['required', 'array', 'min:1', 'max:'.self::ADMIN_BULK_DELETE_LIMIT],
             'ids.*' => ['integer', 'exists:navigation_routes,id'],
         ]);
 

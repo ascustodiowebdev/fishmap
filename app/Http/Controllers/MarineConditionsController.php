@@ -22,7 +22,7 @@ class MarineConditionsController extends Controller
         $latitude = round((float) $validated['latitude'], 3);
         $longitude = round((float) $validated['longitude'], 3);
         $timezone = 'Europe/Lisbon';
-        $cacheKey = sprintf('marine-conditions:%s:%s', $latitude, $longitude);
+        $cacheKey = sprintf('marine-conditions:v4:%s:%s', $latitude, $longitude);
 
         $payload = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($latitude, $longitude, $timezone) {
             return $this->fetchMarineConditions($latitude, $longitude, $timezone);
@@ -100,8 +100,8 @@ class MarineConditionsController extends Controller
      */
     protected function fetchOfficialTide(float $latitude, float $longitude, string $timezone): ?array
     {
-        return $this->fetchTides4FishingTide($latitude, $longitude, $timezone)
-            ?? $this->fetchTabuaDeMaresTide($latitude, $longitude, $timezone);
+        return $this->fetchTabuaDeMaresTide($latitude, $longitude, $timezone)
+            ?? $this->fetchTides4FishingTide($latitude, $longitude, $timezone);
     }
 
     /**
@@ -119,19 +119,16 @@ class MarineConditionsController extends Controller
 
         $now = CarbonImmutable::now($timezone);
         $events = $this->extractTides4FishingTableEvents($html, $timezone);
+        $selection = $this->selectUpcomingTideEvents($events, $now);
 
-        $nextHigh = null;
-        $nextLow = null;
-        foreach ($events as $event) {
-            if ($event['at']->lessThan($now)) {
-                continue;
-            }
-            if ($event['type'] === 'high' && $nextHigh === null) {
-                $nextHigh = $event;
-            }
-            if ($event['type'] === 'low' && $nextLow === null) {
-                $nextLow = $event;
-            }
+        $nextHigh = $selection['next_high'];
+        $nextLow = $selection['next_low'];
+        $nextEvent = $selection['next_event'];
+
+        if (! $this->hasUpcomingTideWithinWindow($nextEvent, $now)) {
+            $nextHigh = null;
+            $nextLow = null;
+            $nextEvent = null;
         }
 
         if ($nextHigh === null || $nextLow === null) {
@@ -144,9 +141,11 @@ class MarineConditionsController extends Controller
             if ($nextLow === null) {
                 $nextLow = $fallbackEvents['next_low'];
             }
+            $selection = $this->selectUpcomingTideEvents(array_filter([$nextHigh, $nextLow]), $now);
+            $nextEvent = $selection['next_event'];
         }
 
-        if ($nextHigh === null && $nextLow === null) {
+        if (($nextHigh === null && $nextLow === null) || ! $this->hasUpcomingTideWithinWindow($nextEvent, $now)) {
             return null;
         }
 
@@ -156,13 +155,11 @@ class MarineConditionsController extends Controller
             ? (int) $coefClassMatch[1]
             : (isset($coefTextMatch[1]) ? (int) $coefTextMatch[1] : null);
 
-        $state = null;
-        if ($nextHigh && $nextLow) {
-            $state = $nextHigh['at']->lessThan($nextLow['at']) ? 'rising' : 'falling';
-        }
-
         return [
-            'state' => $state,
+            'state' => $selection['state'],
+            'next_event_type' => $nextEvent['type'] ?? null,
+            'next_event_at' => $nextEvent ? $nextEvent['at']->toIso8601String() : null,
+            'next_event_m' => $nextEvent['height'] ?? null,
             'next_high_at' => $nextHigh ? $nextHigh['at']->toIso8601String() : null,
             'next_low_at' => $nextLow ? $nextLow['at']->toIso8601String() : null,
             'next_high_m' => $nextHigh['height'] ?? null,
@@ -281,6 +278,208 @@ class MarineConditionsController extends Controller
     }
 
     /**
+     * @return array<int, array{type:string,height:?float,at:CarbonImmutable}>
+     */
+    protected function extractPortugueseTodayTideEvents(string $html, string $timezone): array
+    {
+        $normalized = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $normalized = preg_replace('/\s+/u', ' ', $normalized ?? '') ?? '';
+
+        if ($normalized === '') {
+            return [];
+        }
+
+        $today = CarbonImmutable::now($timezone)->startOfDay();
+        $events = [];
+
+        if (preg_match_all('/(?:primeira|seguinte)\s+preia-mar\s+(?:será|foi)\s+às\s+(\d{1,2}:\d{2})/iu', $normalized, $matches)) {
+            foreach ($matches[1] as $time) {
+                $events[] = $this->buildTideEvent('high', (string) $time, null, $today);
+            }
+        }
+
+        if (preg_match_all('/(?:única|primeira|seguinte)\s+baixa-mar\s+(?:será|foi)\s+às\s+(\d{1,2}:\d{2})/iu', $normalized, $matches)) {
+            foreach ($matches[1] as $time) {
+                $events[] = $this->buildTideEvent('low', (string) $time, null, $today);
+            }
+        }
+
+        return array_values(array_filter($events));
+    }
+
+    /**
+     * @return array<int, array{type:string,height:?float,at:CarbonImmutable}>
+     */
+    protected function extractTabuaMonthlyTideEvents(string $html, string $timezone): array
+    {
+        $normalized = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $normalized = preg_replace('/\s+/u', ' ', $normalized ?? '') ?? '';
+
+        if ($normalized === '') {
+            return [];
+        }
+
+        $now = CarbonImmutable::now($timezone);
+        $events = [];
+        $seen = [];
+
+        preg_match_all('/(?:^|\s)(\d{1,2})\s+(?:Seg|Ter|Qua|Qui|Sex|Sáb|Dom)\s+(?:(?:\d{1,2}:\d{2})\s+(?:\d{1,2}:\d{2})\s+)?((?:\d{1,2}:\d{2}\s+[0-9]+[,.][0-9]+\s*m\s*){1,4})/u', $normalized, $dayMatches, PREG_SET_ORDER);
+
+        foreach ($dayMatches as $dayMatch) {
+            $day = (int) ($dayMatch[1] ?? 0);
+            $row = (string) ($dayMatch[2] ?? '');
+
+            if ($day < 1 || $row === '') {
+                continue;
+            }
+
+            try {
+                $date = CarbonImmutable::create($now->year, $now->month, $day, 0, 0, 0, $timezone);
+            } catch (Throwable) {
+                continue;
+            }
+
+            if (! preg_match_all('/(\d{1,2}:\d{2})\s+([0-9]+[,.][0-9]+)\s*m/u', $row, $tideMatches, PREG_SET_ORDER)) {
+                continue;
+            }
+
+            $rowEvents = [];
+            foreach ($tideMatches as $tideMatch) {
+                $height = $this->toNullableFloat(str_replace(',', '.', (string) ($tideMatch[2] ?? '')));
+                if ($height === null) {
+                    continue;
+                }
+
+                $rowEvents[] = [
+                    'time' => (string) ($tideMatch[1] ?? ''),
+                    'height' => $height,
+                ];
+            }
+
+            $heightCutoff = $this->lowTideHeightCutoff($rowEvents);
+            foreach ($rowEvents as $rowEvent) {
+                $event = $this->buildTideEvent(
+                    $heightCutoff !== null && $rowEvent['height'] <= $heightCutoff ? 'low' : 'high',
+                    (string) $rowEvent['time'],
+                    $rowEvent['height'],
+                    $date
+                );
+
+                if ($event === null) {
+                    continue;
+                }
+
+                $eventKey = $event['at']->toIso8601String().'|'.$event['type'];
+                if (isset($seen[$eventKey])) {
+                    continue;
+                }
+                $seen[$eventKey] = true;
+                $events[] = $event;
+            }
+        }
+
+        usort($events, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
+
+        return $events;
+    }
+
+    /**
+     * @param  array<int, array{type:string,height:?float,at:CarbonImmutable}>  $primary
+     * @param  array<int, array{type:string,height:?float,at:CarbonImmutable}>  $secondary
+     * @return array<int, array{type:string,height:?float,at:CarbonImmutable}>
+     */
+    protected function mergeTideEvents(array $primary, array $secondary): array
+    {
+        $merged = [];
+        foreach (array_merge($primary, $secondary) as $event) {
+            if (! isset($event['type'], $event['at']) || ! $event['at'] instanceof CarbonImmutable) {
+                continue;
+            }
+
+            $eventKey = $event['at']->toIso8601String().'|'.$event['type'];
+            if (! isset($merged[$eventKey]) || ($merged[$eventKey]['height'] === null && ($event['height'] ?? null) !== null)) {
+                $merged[$eventKey] = $event;
+            }
+        }
+
+        $events = array_values($merged);
+        usort($events, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
+
+        return $events;
+    }
+
+    /**
+     * @return array{type:string,height:?float,at:CarbonImmutable}|null
+     */
+    protected function buildTideEvent(string $type, string $time, ?float $height, CarbonImmutable $day): ?array
+    {
+        if (! str_contains($time, ':')) {
+            return null;
+        }
+
+        [$hours, $minutes] = array_map('intval', explode(':', $time));
+
+        return [
+            'type' => $type,
+            'height' => $height,
+            'at' => $day->setTime($hours, $minutes),
+        ];
+    }
+
+    /**
+     * @param  array<int, array{type:string,height:?float,at:CarbonImmutable}>  $events
+     * @return array{next_high:?array{type:string,height:?float,at:CarbonImmutable},next_low:?array{type:string,height:?float,at:CarbonImmutable},next_event:?array{type:string,height:?float,at:CarbonImmutable},state:?string}
+     */
+    protected function selectUpcomingTideEvents(array $events, CarbonImmutable $now): array
+    {
+        $events = array_values(array_filter($events, fn (array $event): bool => isset($event['type'], $event['at']) && $event['at'] instanceof CarbonImmutable));
+        usort($events, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
+
+        $nextHigh = null;
+        $nextLow = null;
+        $nextEvent = null;
+
+        foreach ($events as $event) {
+            if ($event['at']->lessThan($now)) {
+                continue;
+            }
+
+            $nextEvent ??= $event;
+
+            if ($event['type'] === 'high' && $nextHigh === null) {
+                $nextHigh = $event;
+            }
+
+            if ($event['type'] === 'low' && $nextLow === null) {
+                $nextLow = $event;
+            }
+        }
+
+        $state = match ($nextEvent['type'] ?? null) {
+            'high' => 'rising',
+            'low' => 'falling',
+            default => null,
+        };
+
+        return [
+            'next_high' => $nextHigh,
+            'next_low' => $nextLow,
+            'next_event' => $nextEvent,
+            'state' => $state,
+        ];
+    }
+
+    /**
+     * @param  array{type:string,height:?float,at:CarbonImmutable}|null  $event
+     */
+    protected function hasUpcomingTideWithinWindow(?array $event, CarbonImmutable $now): bool
+    {
+        return $event !== null
+            && $event['at']->greaterThanOrEqualTo($now->subMinutes(2))
+            && $event['at']->lessThanOrEqualTo($now->addHours(36));
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     protected function fetchTabuaDeMaresTide(float $latitude, float $longitude, string $timezone): ?array
@@ -291,13 +490,22 @@ class MarineConditionsController extends Controller
             return null;
         }
 
-        preg_match_all('/(\d{1,2}:\d{2})\s*<\/[^>]*>\s*<[^>]*>\s*([0-9]+,[0-9])\s*m/ui', $html, $matches, PREG_SET_ORDER);
+        $now = CarbonImmutable::now($timezone);
+        $todayEvents = $this->extractPortugueseTodayTideEvents($html, $timezone);
+        $monthlyEvents = $this->extractTabuaMonthlyTideEvents($html, $timezone);
+        $selection = $this->selectUpcomingTideEvents($this->mergeTideEvents($todayEvents, $monthlyEvents), $now);
+
+        if ($this->hasUpcomingTideWithinWindow($selection['next_event'], $now)) {
+            return $this->formatOfficialTideSelection($html, $selection, 'tabuademares');
+        }
+
+        preg_match_all('/(\d{1,2}:\d{2})\s*<\/[^>]*>\s*<[^>]*>\s*([0-9]+[,.][0-9]+)\s*m/ui', $html, $matches, PREG_SET_ORDER);
         if (count($matches) < 2) {
             return null;
         }
 
         $events = [];
-        foreach ($matches as $index => $match) {
+        foreach ($matches as $match) {
             $time = trim((string) Arr::get($match, 1, ''));
             $heightRaw = str_replace(',', '.', (string) Arr::get($match, 2, ''));
             $height = $this->toNullableFloat($heightRaw);
@@ -305,9 +513,7 @@ class MarineConditionsController extends Controller
                 continue;
             }
 
-            // Page alternates low/high/low/high for the day.
             $events[] = [
-                'type' => $index % 2 === 0 ? 'low' : 'high',
                 'time' => $time,
                 'height' => $height,
             ];
@@ -318,55 +524,74 @@ class MarineConditionsController extends Controller
         }
 
         $today = CarbonImmutable::now($timezone)->startOfDay();
-        $now = CarbonImmutable::now($timezone);
 
-        $normalized = array_map(function (array $event) use ($today): array {
+        $heightCutoff = $this->lowTideHeightCutoff($events);
+
+        $normalized = array_map(function (array $event) use ($today, $heightCutoff): array {
             [$hours, $minutes] = array_map('intval', explode(':', (string) $event['time']));
             return [
-                'type' => $event['type'],
+                'type' => $heightCutoff !== null && $event['height'] <= $heightCutoff ? 'low' : 'high',
                 'height' => $event['height'],
                 'at' => $today->setTime($hours, $minutes),
             ];
         }, $events);
 
-        usort($normalized, fn (array $a, array $b): int => $a['at']->lessThan($b['at']) ? -1 : 1);
+        $selection = $this->selectUpcomingTideEvents($normalized, $now);
 
-        $nextHigh = null;
-        $nextLow = null;
-        foreach ($normalized as $event) {
-            if ($event['at']->lessThan($now)) {
-                continue;
-            }
-            if ($event['type'] === 'high' && $nextHigh === null) {
-                $nextHigh = $event;
-            }
-            if ($event['type'] === 'low' && $nextLow === null) {
-                $nextLow = $event;
-            }
+        if (! $this->hasUpcomingTideWithinWindow($selection['next_event'], $now)) {
+            return null;
         }
 
-        preg_match('/coeficiente[^0-9]{0,40}([0-9]{1,3})/ui', $html, $coefMatch);
+        return $this->formatOfficialTideSelection($html, $selection, 'tabuademares');
+    }
+
+    /**
+     * @param  array{next_high:?array{type:string,height:?float,at:CarbonImmutable},next_low:?array{type:string,height:?float,at:CarbonImmutable},next_event:?array{type:string,height:?float,at:CarbonImmutable},state:?string}  $selection
+     * @return array<string, mixed>
+     */
+    protected function formatOfficialTideSelection(string $html, array $selection, string $provider): array
+    {
+        $nextHigh = $selection['next_high'];
+        $nextLow = $selection['next_low'];
+        $nextEvent = $selection['next_event'];
+
+        preg_match('/coeficiente[^0-9]{0,80}([0-9]{1,3})/ui', html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'), $coefMatch);
         $coefficient = isset($coefMatch[1]) ? (int) $coefMatch[1] : null;
 
-        $state = null;
-        if ($nextHigh && $nextLow) {
-            $state = $nextHigh['at']->lessThan($nextLow['at']) ? 'rising' : 'falling';
-        }
-
         return [
-            'state' => $state,
+            'state' => $selection['state'],
+            'next_event_type' => $nextEvent['type'] ?? null,
+            'next_event_at' => $nextEvent ? $nextEvent['at']->toIso8601String() : null,
+            'next_event_m' => $nextEvent['height'] ?? null,
             'next_high_at' => $nextHigh ? $nextHigh['at']->toIso8601String() : null,
             'next_low_at' => $nextLow ? $nextLow['at']->toIso8601String() : null,
             'next_high_m' => $nextHigh['height'] ?? null,
             'next_low_m' => $nextLow['height'] ?? null,
             'coefficient' => $coefficient,
-            'provider' => 'tabuademares',
+            'provider' => $provider,
         ];
+    }
+
+    /**
+     * @param  array<int, array{height:float}>  $events
+     */
+    protected function lowTideHeightCutoff(array $events): ?float
+    {
+        $heights = array_values(array_filter(array_map(fn (array $event): ?float => $this->toNullableFloat($event['height'] ?? null), $events), fn (?float $height): bool => $height !== null));
+
+        if (count($heights) < 2) {
+            return null;
+        }
+
+        sort($heights, SORT_NUMERIC);
+        $lowCount = max(1, (int) floor(count($heights) / 2));
+
+        return $heights[$lowCount - 1] ?? null;
     }
 
     protected function resolveTabuaSlug(float $latitude, float $longitude): string
     {
-        // Faro/Olhao area first (primary Fishmap usage); fallback keeps working for Portugal.
+        // Faro/Olhao area first (primary NautiBite usage); fallback keeps working for Portugal.
         if ($latitude >= 36.7 && $latitude <= 37.5 && $longitude >= -8.4 && $longitude <= -7.6) {
             return 'faro/faro';
         }
@@ -379,7 +604,7 @@ class MarineConditionsController extends Controller
         try {
             $response = Http::timeout(10)
                 ->withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Fishmap/1.0',
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 NautiBite/1.0',
                     'Accept-Language' => 'en-US,en;q=0.9,pt-PT;q=0.8',
                 ])
                 ->get($url);
@@ -396,7 +621,7 @@ class MarineConditionsController extends Controller
                 'method' => 'GET',
                 'timeout' => 10,
                 'header' => implode("\r\n", [
-                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Fishmap/1.0',
+                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 NautiBite/1.0',
                     'Accept-Language: en-US,en;q=0.9,pt-PT;q=0.8',
                 ]),
             ],

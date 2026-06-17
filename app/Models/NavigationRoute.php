@@ -15,6 +15,8 @@ class NavigationRoute extends Model
         'user_id',
         'name',
         'visibility',
+        'share_token',
+        'shared_at',
         'started_at',
         'ended_at',
         'point_count',
@@ -29,6 +31,7 @@ class NavigationRoute extends Model
         return [
             'started_at' => 'datetime',
             'ended_at' => 'datetime',
+            'shared_at' => 'datetime',
             'start_latitude' => 'decimal:7',
             'start_longitude' => 'decimal:7',
             'end_latitude' => 'decimal:7',

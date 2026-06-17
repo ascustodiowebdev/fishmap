@@ -15,5 +15,5 @@ if (-not (Test-Path $configPath)) {
     Write-Error "ngrok profile not found at $configPath"
 }
 
-Write-Host "Starting Fishmap tunnel on port $Port..."
+Write-Host "Starting NautiBite tunnel on port $Port..."
 & $ngrokPath http --config $configPath $Port

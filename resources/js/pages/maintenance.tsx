@@ -85,7 +85,7 @@ export default function MaintenancePage() {
                 <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
                     <header className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-center sm:justify-between">
                         <div className="max-w-sm">
-                            <p className="text-sm font-semibold tracking-[0.24em] text-teal-300 uppercase">Fishmap</p>
+                            <p className="text-sm font-semibold tracking-[0.24em] text-teal-300 uppercase">NautiBite</p>
                             <p className="mt-1 text-sm text-slate-300">{t('maintenance.tagline')}</p>
                         </div>
 
@@ -116,15 +116,26 @@ export default function MaintenancePage() {
                                 {t('maintenance.badge')}
                             </div>
 
-                            <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl" style={{ fontFamily: 'Manrope, sans-serif' }}>
+                            <h1
+                                className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl"
+                                style={{ fontFamily: 'Manrope, sans-serif' }}
+                            >
                                 {t('maintenance.heading')}
                             </h1>
 
                             <p className="mt-5 max-w-xl text-base leading-8 text-slate-300 sm:text-lg">{t('maintenance.copy')}</p>
 
                             <div className="mt-8 flex flex-wrap gap-3">
-                                <Button type="button" className="rounded-full bg-teal-500 px-5 py-3 text-slate-950 hover:bg-teal-400" onClick={startGame}>
-                                    {timeLeft <= 0 ? t('maintenance.play_again') : isPlaying ? t('maintenance.restart_game') : t('maintenance.play_game')}
+                                <Button
+                                    type="button"
+                                    className="rounded-full bg-teal-500 px-5 py-3 text-slate-950 hover:bg-teal-400"
+                                    onClick={startGame}
+                                >
+                                    {timeLeft <= 0
+                                        ? t('maintenance.play_again')
+                                        : isPlaying
+                                          ? t('maintenance.restart_game')
+                                          : t('maintenance.play_game')}
                                 </Button>
                                 <Link
                                     href={route('home')}
@@ -139,10 +150,14 @@ export default function MaintenancePage() {
                             <div className="rounded-[1.5rem] bg-[#0a1720] p-5">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
-                                        <p className="text-xs font-semibold tracking-[0.24em] text-teal-300 uppercase">{t('maintenance.game_title')}</p>
+                                        <p className="text-xs font-semibold tracking-[0.24em] text-teal-300 uppercase">
+                                            {t('maintenance.game_title')}
+                                        </p>
                                         <p className="mt-1 text-sm text-slate-300">{gameLabel}</p>
                                     </div>
-                                    <div className="rounded-full bg-white/8 px-4 py-2 text-sm font-semibold text-white">{t('maintenance.points', { score })}</div>
+                                    <div className="rounded-full bg-white/8 px-4 py-2 text-sm font-semibold text-white">
+                                        {t('maintenance.points', { score })}
+                                    </div>
                                 </div>
 
                                 <div className="relative mt-5 h-[340px] overflow-hidden rounded-[1.5rem] border border-white/8 bg-[radial-gradient(circle_at_top,_rgba(71,166,191,0.18),_transparent_30%),linear-gradient(180deg,_#9ad1e3_0%,_#7fb8cf_40%,_#4f95b2_100%)]">
