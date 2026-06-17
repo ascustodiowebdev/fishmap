@@ -178,7 +178,8 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
     const [statsCollapsed, setStatsCollapsed] = useState(true);
     const [routeCardCollapsed, setRouteCardCollapsed] = useState(true);
     const [marineCardCollapsed, setMarineCardCollapsed] = useState(true);
-    const [bugReportCollapsed, setBugReportCollapsed] = useState(true);
+    const [bugReportDialogOpen, setBugReportDialogOpen] = useState(false);
+    const [isSubmittingBugReport, setIsSubmittingBugReport] = useState(false);
     const [routeEditModeRouteId, setRouteEditModeRouteId] = useState<number | null>(null);
     const [routeEditDraftPoints, setRouteEditDraftPoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
     const [routeEditSelection, setRouteEditSelection] = useState<[number, number] | null>(null);
@@ -1455,20 +1456,28 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
     const submitBugReport = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
-        bugReportForm
-            .transform((data) => ({
-                ...data,
+        router.post(
+            route('bug-reports.store'),
+            {
+                ...bugReportForm.data,
                 client_platform: isNativeRuntime ? 'android' : 'browser',
                 client_context: `${window.location.pathname} ${window.innerWidth}x${window.innerHeight}`,
-            }))
-            .post(route('bug-reports.store'), {
+            },
+            {
                 preserveScroll: true,
+                onStart: () => {
+                    setIsSubmittingBugReport(true);
+                    bugReportForm.clearErrors();
+                },
+                onFinish: () => setIsSubmittingBugReport(false),
+                onError: (errors) => bugReportForm.setError(errors),
                 onSuccess: () => {
                     bugReportForm.reset('subject', 'message', 'website');
                     bugReportForm.setData('category', 'bug');
-                    setBugReportCollapsed(true);
+                    setBugReportDialogOpen(false);
                 },
-            });
+            },
+        );
     };
 
     const handleMapPositionChange = useCallback(
@@ -1614,6 +1623,88 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
                 </DialogContent>
             </Dialog>
 
+            <Dialog open={bugReportDialogOpen} onOpenChange={setBugReportDialogOpen}>
+                <DialogContent className="max-h-[90dvh] w-[calc(100%-1rem)] max-w-lg overflow-y-auto rounded-3xl border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                    <DialogHeader className="pr-8 text-left">
+                        <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
+                            <Bug className="size-5" />
+                        </div>
+                        <DialogTitle className="text-xl text-slate-950 dark:text-slate-50">{t('dashboard.bug_report_title')}</DialogTitle>
+                        <DialogDescription className="leading-6 text-slate-600 dark:text-slate-300">
+                            {t('dashboard.bug_report_copy')}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <form onSubmit={submitBugReport} className="space-y-3">
+                        <input
+                            value={bugReportForm.data.website}
+                            onChange={(event) => bugReportForm.setData('website', event.target.value)}
+                            className="hidden"
+                            tabIndex={-1}
+                            autoComplete="off"
+                        />
+                        <select
+                            value={bugReportForm.data.category}
+                            onChange={(event) => bugReportForm.setData('category', event.target.value as BugReport['category'])}
+                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                        >
+                            <option value="bug">{t('dashboard.bug_category_bug')}</option>
+                            <option value="gps">{t('dashboard.bug_category_gps')}</option>
+                            <option value="map">{t('dashboard.bug_category_map')}</option>
+                            <option value="account">{t('dashboard.bug_category_account')}</option>
+                            <option value="login">{t('dashboard.bug_category_login')}</option>
+                            <option value="other">{t('dashboard.bug_category_other')}</option>
+                        </select>
+                        <input
+                            value={bugReportForm.data.subject}
+                            onChange={(event) => bugReportForm.setData('subject', event.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                            placeholder={t('dashboard.bug_report_subject')}
+                            maxLength={160}
+                        />
+                        <textarea
+                            value={bugReportForm.data.message}
+                            onChange={(event) => bugReportForm.setData('message', event.target.value)}
+                            className="min-h-32 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                            placeholder={t('dashboard.bug_report_message')}
+                            maxLength={3000}
+                        />
+                        {Object.values(bugReportForm.errors).length > 0 ? (
+                            <p className="text-sm text-amber-700 dark:text-amber-300">{Object.values(bugReportForm.errors)[0]}</p>
+                        ) : null}
+                        <Button type="submit" disabled={isSubmittingBugReport} className="w-full rounded-2xl">
+                            {isSubmittingBugReport ? t('common.saving') : t('dashboard.bug_report_send')}
+                        </Button>
+                    </form>
+
+                    {bugReports.length > 0 ? (
+                        <div className="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                            <p className="text-xs font-semibold tracking-[0.16em] text-slate-500 uppercase dark:text-slate-400">
+                                {t('dashboard.bug_report_recent')}
+                            </p>
+                            {bugReports.map((report) => (
+                                <div
+                                    key={report.id}
+                                    className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <p className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{report.subject}</p>
+                                        <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                                            {formatBugReportStatus(report.status, t)}
+                                        </span>
+                                    </div>
+                                    {report.admin_response ? (
+                                        <p className="mt-2 rounded-xl bg-teal-50 px-2 py-1.5 text-xs leading-5 text-teal-900 dark:bg-teal-950/60 dark:text-teal-100">
+                                            {report.admin_response}
+                                        </p>
+                                    ) : null}
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
+                </DialogContent>
+            </Dialog>
+
             <div className={`flex flex-col p-0 md:h-screen ${isNativeRuntime ? 'min-h-svh' : 'h-[100dvh] min-h-[100dvh]'}`}>
                 <section className="relative min-h-0 flex-1 overflow-hidden rounded-none bg-[#081217]">
                     <CatchMap
@@ -1707,20 +1798,14 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
                             className={`${mobileHudOpen ? 'flex' : 'hidden'} pointer-events-auto max-h-[calc(100svh-5rem)] flex-col gap-3 overflow-y-auto pr-1 md:flex md:max-h-none md:overflow-visible md:pr-0`}
                         >
                             <div className="hidden rounded-[1.5rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur md:block dark:border-slate-700 dark:bg-slate-900/88">
-                                <div className="hidden items-center justify-between gap-3 md:flex">
-                                    <Link href={route('home')}>
-                                        <AppWordmark className="h-7 w-[155px] sm:h-9 sm:w-[190px]" />
-                                    </Link>
-                                    <Link
-                                        href={route('home')}
-                                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:hover:border-slate-600"
-                                    >
-                                        {t('app.home')}
+                                <div className="hidden justify-center md:flex">
+                                    <Link href={route('home')} className="block">
+                                        <AppWordmark className="h-28 w-[210px]" />
                                     </Link>
                                 </div>
-                                <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl dark:text-slate-50">
-                                    {t('dashboard.live_map')}
-                                </h1>
+                                <div className="mt-3 rounded-full border border-slate-200/80 bg-white/70 px-4 py-2 text-center text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-200">
+                                    {satelliteQuotaLabel}
+                                </div>
                                 <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                                     {t(canRecordRoutes ? 'dashboard.hold_map' : 'dashboard.hold_map_fish_only')}
                                 </p>
@@ -1755,103 +1840,6 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
                                             value={routeCount}
                                             onClick={() => openLibraryDialog('routes')}
                                         />
-                                    </div>
-                                ) : null}
-                            </div>
-
-                            <div className="rounded-full border border-white/70 bg-white/88 px-4 py-2 text-xs font-semibold text-slate-700 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88 dark:text-slate-200">
-                                {satelliteQuotaLabel}
-                            </div>
-
-                            <div className="rounded-[1.35rem] border border-white/70 bg-white/88 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur dark:border-slate-700 dark:bg-slate-900/88">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <p className="flex items-center gap-2 text-sm font-semibold text-slate-950 dark:text-slate-50">
-                                            <Bug className="size-4 text-amber-600 dark:text-amber-300" />
-                                            {t('dashboard.bug_report_title')}
-                                        </p>
-                                        <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{t('dashboard.bug_report_copy')}</p>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => setBugReportCollapsed((current) => !current)}
-                                        className="rounded-full p-1 text-slate-600 dark:text-slate-300"
-                                    >
-                                        {bugReportCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
-                                    </button>
-                                </div>
-
-                                {!bugReportCollapsed ? (
-                                    <div className="mt-4 space-y-4">
-                                        <form onSubmit={submitBugReport} className="space-y-3">
-                                            <input
-                                                value={bugReportForm.data.website}
-                                                onChange={(event) => bugReportForm.setData('website', event.target.value)}
-                                                className="hidden"
-                                                tabIndex={-1}
-                                                autoComplete="off"
-                                            />
-                                            <select
-                                                value={bugReportForm.data.category}
-                                                onChange={(event) => bugReportForm.setData('category', event.target.value as BugReport['category'])}
-                                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                                            >
-                                                <option value="bug">{t('dashboard.bug_category_bug')}</option>
-                                                <option value="gps">{t('dashboard.bug_category_gps')}</option>
-                                                <option value="map">{t('dashboard.bug_category_map')}</option>
-                                                <option value="account">{t('dashboard.bug_category_account')}</option>
-                                                <option value="login">{t('dashboard.bug_category_login')}</option>
-                                                <option value="other">{t('dashboard.bug_category_other')}</option>
-                                            </select>
-                                            <input
-                                                value={bugReportForm.data.subject}
-                                                onChange={(event) => bugReportForm.setData('subject', event.target.value)}
-                                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                                                placeholder={t('dashboard.bug_report_subject')}
-                                                maxLength={160}
-                                            />
-                                            <textarea
-                                                value={bugReportForm.data.message}
-                                                onChange={(event) => bugReportForm.setData('message', event.target.value)}
-                                                className="min-h-24 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                                                placeholder={t('dashboard.bug_report_message')}
-                                                maxLength={3000}
-                                            />
-                                            {Object.values(bugReportForm.errors).length > 0 ? (
-                                                <p className="text-xs text-amber-700 dark:text-amber-300">{Object.values(bugReportForm.errors)[0]}</p>
-                                            ) : null}
-                                            <Button type="submit" disabled={bugReportForm.processing} className="w-full rounded-xl">
-                                                {bugReportForm.processing ? t('common.saving') : t('dashboard.bug_report_send')}
-                                            </Button>
-                                        </form>
-
-                                        {bugReports.length > 0 ? (
-                                            <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
-                                                <p className="text-xs font-semibold tracking-[0.16em] text-slate-500 uppercase dark:text-slate-400">
-                                                    {t('dashboard.bug_report_recent')}
-                                                </p>
-                                                {bugReports.map((report) => (
-                                                    <div
-                                                        key={report.id}
-                                                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
-                                                    >
-                                                        <div className="flex items-start justify-between gap-2">
-                                                            <p className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                                                {report.subject}
-                                                            </p>
-                                                            <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                                                                {formatBugReportStatus(report.status, t)}
-                                                            </span>
-                                                        </div>
-                                                        {report.admin_response ? (
-                                                            <p className="mt-2 rounded-lg bg-teal-50 px-2 py-1.5 text-xs leading-5 text-teal-900 dark:bg-teal-950/60 dark:text-teal-100">
-                                                                {report.admin_response}
-                                                            </p>
-                                                        ) : null}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        ) : null}
                                     </div>
                                 ) : null}
                             </div>
@@ -2357,6 +2345,17 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
                     </Dialog>
 
                     <div className="absolute right-3 bottom-14 z-[500] flex flex-col items-end gap-2 md:right-5 md:bottom-5 md:gap-3">
+                        <Button
+                            type="button"
+                            size="icon"
+                            variant="secondary"
+                            className="h-11 w-11 rounded-full text-amber-700 shadow-lg md:h-12 md:w-12 dark:text-amber-300"
+                            onClick={() => setBugReportDialogOpen(true)}
+                            title={t('dashboard.bug_report_title')}
+                        >
+                            <Bug className="size-5" />
+                        </Button>
+
                         <Button
                             type="button"
                             size="icon"

@@ -670,7 +670,7 @@ export function CatchMap({
                     keepBuffer={tileKeepBuffer}
                     updateInterval={tileUpdateInterval}
                     updateWhenIdle={false}
-                    updateWhenZooming
+                    updateWhenZooming={false}
                     eventHandlers={{
                         loading: () => {
                             if (hasCompletedInitialLoad) {
@@ -704,7 +704,7 @@ export function CatchMap({
                         keepBuffer={tileKeepBuffer}
                         updateInterval={tileUpdateInterval}
                         updateWhenIdle={false}
-                        updateWhenZooming
+                        updateWhenZooming={false}
                     />
                 ) : null}
                 {shouldRenderDepthLayer ? (

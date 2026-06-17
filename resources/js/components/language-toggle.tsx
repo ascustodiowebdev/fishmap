@@ -5,10 +5,10 @@ import { router } from '@inertiajs/react';
 export function LanguageToggle() {
     const { locale } = useTranslator();
     const nextLocale = locale === 'en' ? 'pt' : 'en';
-    const nextLabel = nextLocale.toUpperCase();
+    const currentLabel = locale.toUpperCase();
 
     return (
-        <div className="inline-flex items-center rounded-full border border-slate-200/80 bg-white/80 p-1 shadow-sm backdrop-blur">
+        <div className="inline-flex items-center rounded-full border border-slate-200/80 bg-white/80 p-1 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/80">
             <Button
                 type="button"
                 size="sm"
@@ -18,7 +18,7 @@ export function LanguageToggle() {
                     router.post(route('locale.update'), { locale: nextLocale }, { preserveScroll: true });
                 }}
             >
-                {nextLabel}
+                {currentLabel}
             </Button>
         </div>
     );
