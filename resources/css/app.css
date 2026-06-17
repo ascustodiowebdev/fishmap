@@ -177,14 +177,15 @@
 .fishmap-map .leaflet-tile-pane,
 .fishmap-map .leaflet-overlay-pane,
 .fishmap-map .leaflet-marker-pane {
-    backface-visibility: hidden;
-    transform-style: preserve-3d;
-    will-change: transform;
+    backface-visibility: visible;
+    transform-style: flat;
+    will-change: auto;
 }
 
 .fishmap-map .leaflet-tile {
-    backface-visibility: hidden;
-    transform: translateZ(0);
+    backface-visibility: visible;
+    transform: none;
+    will-change: auto;
 }
 
 .fishmap-map--mobile-browser .leaflet-map-pane,
