@@ -2,12 +2,15 @@ import AppWordmark from '@/components/app-wordmark';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useTranslator } from '@/lib/i18n';
 import { type SharedData } from '@/types';
+import { Capacitor } from '@capacitor/core';
 import { Head, Link, usePage } from '@inertiajs/react';
 import { Compass, Fish, Route } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 export default function Welcome() {
     const { auth, name, appState } = usePage<SharedData>().props;
     const { t } = useTranslator();
+    const [showAndroidDownload, setShowAndroidDownload] = useState(false);
     const features = [
         {
             title: t('welcome.feature_1_title'),
@@ -25,6 +28,14 @@ export default function Welcome() {
             icon: Route,
         },
     ];
+
+    useEffect(() => {
+        const userAgent = window.navigator.userAgent;
+        const isNativeApp = Capacitor.isNativePlatform() || /\b(wv|Capacitor)\b/i.test(userAgent);
+        const isAndroidBrowser = /Android/i.test(userAgent) && !isNativeApp;
+
+        setShowAndroidDownload(isAndroidBrowser);
+    }, []);
 
     return (
         <>
@@ -90,6 +101,14 @@ export default function Welcome() {
                                     >
                                         {auth.user ? t('welcome.go') : t('welcome.start')}
                                     </Link>
+                                    {showAndroidDownload ? (
+                                        <a
+                                            href="/downloads/nautibite-android.apk"
+                                            className="rounded-full border border-slate-300 bg-white/80 px-5 py-3 text-center text-sm font-semibold text-slate-950 transition hover:border-slate-400 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-50 dark:hover:border-slate-500"
+                                        >
+                                            {t('welcome.android_install_button')}
+                                        </a>
+                                    ) : null}
                                 </div>
                             </div>
                         </section>
