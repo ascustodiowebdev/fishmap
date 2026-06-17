@@ -1,7 +1,8 @@
 <?php
 
-use App\Http\Controllers\CatchLogController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\BugReportController;
+use App\Http\Controllers\CatchLogController;
 use App\Http\Controllers\MarineConditionsController;
 use App\Http\Controllers\NavigationRouteController;
 use App\Http\Controllers\SatelliteUsageController;
@@ -48,6 +49,9 @@ Route::middleware(['auth', 'maintenance'])->group(function () {
     Route::delete('navigation-routes/{navigationRoute}', [NavigationRouteController::class, 'destroy'])->name('navigation-routes.destroy');
     Route::post('navigation-routes/{navigationRoute}/share', [NavigationRouteController::class, 'share'])->name('navigation-routes.share');
     Route::delete('navigation-routes/{navigationRoute}/share', [NavigationRouteController::class, 'revokeShare'])->name('navigation-routes.share.destroy');
+    Route::post('bug-reports', [BugReportController::class, 'store'])
+        ->middleware(['throttle:6,1', 'throttle:20,60'])
+        ->name('bug-reports.store');
     Route::get('marine-conditions', MarineConditionsController::class)->middleware('throttle:60,1')->name('marine-conditions');
     Route::post('satellite-usage', [SatelliteUsageController::class, 'store'])->middleware('throttle:30,1')->name('satellite-usage.store');
 });
@@ -57,6 +61,8 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::patch('maintenance', [AdminController::class, 'updateMaintenance'])->name('maintenance.update');
     Route::patch('registrations', [AdminController::class, 'updateRegistrations'])->name('registrations.update');
     Route::patch('pro-settings', [AdminController::class, 'updateProSettings'])->name('pro-settings.update');
+    Route::get('bug-reports', [AdminController::class, 'bugReports'])->name('bug-reports.index');
+    Route::patch('bug-reports/{bugReport}', [AdminController::class, 'updateBugReport'])->name('bug-reports.update');
     Route::patch('users/{user}/pro', [AdminController::class, 'updateUserPro'])->name('users.pro.update');
     Route::post('users/{user}/password-reset', [AdminController::class, 'sendPasswordReset'])->name('users.password-reset');
     Route::delete('users/{user}', [AdminController::class, 'destroyUser'])->name('users.destroy');

@@ -41,15 +41,18 @@ export default function SharedResourcePage({ kind, resource }: SharedResourcePro
 
     return (
         <main className="min-h-svh bg-[#081217] px-4 py-5 text-slate-950 sm:px-6 lg:px-8 dark:text-slate-50">
-            <Head title={`${resource.title} - Fishmap`} />
+            <Head title={`${resource.title} - NautiBite`} />
 
             <div className="mx-auto flex min-h-[calc(100svh-2.5rem)] max-w-3xl flex-col">
                 <header className="flex items-center justify-between gap-3 py-3">
                     <Link href={route('home')}>
                         <AppWordmark className="h-8 w-[180px]" />
                     </Link>
-                    <Link href={route('home')} className="rounded-full border border-white/15 bg-white/8 px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/14">
-                        Fishmap
+                    <Link
+                        href={route('home')}
+                        className="rounded-full border border-white/15 bg-white/8 px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/14"
+                    >
+                        NautiBite
                     </Link>
                 </header>
 
@@ -72,7 +75,11 @@ export default function SharedResourcePage({ kind, resource }: SharedResourcePro
                     </div>
 
                     <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                        <InfoCard icon={MapPin} label="Coordinates" value={coordinates ? `${coordinates.latitude}, ${coordinates.longitude}` : 'Not available'} />
+                        <InfoCard
+                            icon={MapPin}
+                            label="Coordinates"
+                            value={coordinates ? `${coordinates.latitude}, ${coordinates.longitude}` : 'Not available'}
+                        />
                         <InfoCard
                             icon={CalendarDays}
                             label={isRoute ? 'Route date' : 'Catch date'}
@@ -96,7 +103,10 @@ export default function SharedResourcePage({ kind, resource }: SharedResourcePro
                             {resource.bait_used ? <TextBlock label="Bait" value={resource.bait_used} /> : null}
                             {resource.notes ? <TextBlock label="Notes" value={resource.notes} /> : null}
                             {resource.photo_url ? (
-                                <a href={resource.photo_url} className="text-sm font-semibold text-teal-800 hover:text-teal-700 dark:text-teal-300 dark:hover:text-teal-200">
+                                <a
+                                    href={resource.photo_url}
+                                    className="text-sm font-semibold text-teal-800 hover:text-teal-700 dark:text-teal-300 dark:hover:text-teal-200"
+                                >
                                     Open photo
                                 </a>
                             ) : null}
@@ -112,7 +122,7 @@ export default function SharedResourcePage({ kind, resource }: SharedResourcePro
                             </Button>
                         ) : null}
                         <Button asChild variant="outline">
-                            <Link href={route('home')}>Open Fishmap</Link>
+                            <Link href={route('home')}>Open NautiBite</Link>
                         </Button>
                     </div>
                 </section>
@@ -127,7 +137,9 @@ export default function SharedResourcePage({ kind, resource }: SharedResourcePro
                                     className="grid gap-1 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
                                 >
                                     <p className="font-semibold text-slate-900 dark:text-slate-100">Point {point.sequence ?? index + 1}</p>
-                                    <p className="text-slate-600 dark:text-slate-300">{point.latitude}, {point.longitude}</p>
+                                    <p className="text-slate-600 dark:text-slate-300">
+                                        {point.latitude}, {point.longitude}
+                                    </p>
                                     <p className="text-xs text-slate-500 dark:text-slate-400">{formatDate(point.recorded_at)}</p>
                                 </div>
                             ))}

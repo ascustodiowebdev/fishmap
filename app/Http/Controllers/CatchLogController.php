@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AppSetting;
+use App\Models\BugReport;
 use App\Models\CatchLog;
 use App\Models\NavigationRoute;
 use App\Models\SatelliteUsage;
@@ -18,7 +19,9 @@ use Inertia\Response;
 class CatchLogController extends Controller
 {
     private const DEFAULT_FREE_SPOT_LIMIT = 5;
+
     private const DEFAULT_FREE_ROUTE_LIMIT = 3;
+
     private const DEFAULT_FREE_SATELLITE_SECONDS = 10800;
 
     public function index(): Response
@@ -66,6 +69,23 @@ class CatchLogController extends Controller
 
         $ownCatchLogs = $catchLogs->where('is_owner', true);
 
+        $bugReports = BugReport::query()
+            ->where('user_id', $viewerId)
+            ->latest()
+            ->limit(5)
+            ->get()
+            ->map(fn (BugReport $report) => [
+                'id' => $report->id,
+                'category' => $report->category,
+                'subject' => $report->subject,
+                'message' => $report->message,
+                'status' => $report->status,
+                'admin_response' => $report->admin_response,
+                'admin_responded_at' => optional($report->admin_responded_at)?->toIso8601String(),
+                'created_at' => $report->created_at->toIso8601String(),
+                'updated_at' => $report->updated_at->toIso8601String(),
+            ]);
+
         $navigationRoutesQuery = NavigationRoute::query()
             ->with('user:id,name', 'points:id,navigation_route_id,latitude,longitude,recorded_at,sequence')
             ->latest('started_at')
@@ -105,6 +125,7 @@ class CatchLogController extends Controller
         return Inertia::render('dashboard', [
             'catchLogs' => $catchLogs,
             'navigationRoutes' => $navigationRoutes,
+            'bugReports' => $bugReports,
             'subscription' => $this->subscriptionPayload($viewer, $ownCatchLogs->count(), NavigationRoute::query()->where('user_id', $viewerId)->count(), $viewerIsPro),
             'stats' => [
                 'total_catches' => $ownCatchLogs->count(),
@@ -126,7 +147,7 @@ class CatchLogController extends Controller
             }
         }
 
-        Log::info('Fishmap catch save request validated.', [
+        Log::info('NautiBite catch save request validated.', [
             'user_id' => $user?->id,
             'species' => $validated['species'],
             'visibility' => $validated['visibility'],

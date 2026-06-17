@@ -15,7 +15,7 @@ return new class extends Migration
 
         DB::table('users')
             ->where('email', 'admin@fishmap.test')
-            ->orWhere('name', 'Fishmap Admin')
+            ->orWhere('name', 'NautiBite Admin')
             ->update(['is_admin' => true]);
     }
 

@@ -19,8 +19,6 @@ use Throwable;
 class GoogleAuthController extends Controller
 {
     private const MOBILE_AUTH_COOKIE = 'google_auth_mobile';
-    private const MOBILE_STATE_CACHE_PREFIX = 'mobile_google_state:';
-    private const MOBILE_TOKEN_CACHE_PREFIX = 'mobile_google_login:';
 
     public function redirect(Request $request): RedirectResponse
     {
@@ -30,6 +28,7 @@ class GoogleAuthController extends Controller
             'is_mobile_flow' => $isMobileFlow,
             'mobile_query' => $request->boolean('mobile'),
             'native_request' => $this->isNativeAppRequest($request),
+            'user_agent' => (string) $request->userAgent(),
         ]);
 
         $driver = Socialite::driver('google')
@@ -40,8 +39,6 @@ class GoogleAuthController extends Controller
         }
 
         $state = 'fm_mobile:'.Str::random(48);
-        Cache::put(self::MOBILE_STATE_CACHE_PREFIX.$state, true, now()->addMinutes(10));
-
         $query = http_build_query([
             'client_id' => (string) config('services.google.client_id'),
             'redirect_uri' => (string) config('services.google.redirect'),
@@ -54,6 +51,7 @@ class GoogleAuthController extends Controller
         $oauthUrl = 'https://accounts.google.com/o/oauth2/v2/auth?'.$query;
         Log::info('google_auth.redirect.mobile_oauth', [
             'state_prefix' => Str::substr($state, 0, 18),
+            'redirect_uri' => (string) config('services.google.redirect'),
         ]);
 
         $response = redirect()->away($oauthUrl);
@@ -77,28 +75,15 @@ class GoogleAuthController extends Controller
         $isMobileFromState = str_starts_with($mobileState, 'fm_mobile:');
         $isMobileFromSession = (bool) $request->session()->pull('google_auth_mobile', false);
         $isMobileFromCookie = $request->cookie(self::MOBILE_AUTH_COOKIE) === '1';
-        $isValidMobileState = $isMobileFromState
-            && (bool) Cache::pull(self::MOBILE_STATE_CACHE_PREFIX.$mobileState);
-        $isMobileFlow = $isValidMobileState;
-
-        if (($isMobileFromState || $isMobileFromSession || $isMobileFromCookie) && ! $isValidMobileState) {
-            Log::warning('google_auth.callback.invalid_mobile_state', [
-                'mobile_from_state' => $isMobileFromState,
-                'mobile_from_session' => $isMobileFromSession,
-                'mobile_from_cookie' => $isMobileFromCookie,
-                'state_prefix' => Str::substr($mobileState, 0, 18),
-            ]);
-
-            return redirect()
-                ->route('login')
-                ->withoutCookie(self::MOBILE_AUTH_COOKIE)
-                ->with('error', __('Unable to authenticate with Google right now.'));
-        }
-
+        $isMobileFlow = $isMobileFromState || $isMobileFromSession || $isMobileFromCookie;
         Log::info('google_auth.callback.start', [
             'is_mobile_flow' => $isMobileFlow,
+            'mobile_from_state' => $isMobileFromState,
+            'mobile_from_session' => $isMobileFromSession,
+            'mobile_from_cookie' => $isMobileFromCookie,
             'state_prefix' => Str::substr($mobileState, 0, 18),
             'has_code' => $request->query('code') !== null,
+            'user_agent' => (string) $request->userAgent(),
         ]);
 
         try {
@@ -117,6 +102,7 @@ class GoogleAuthController extends Controller
         if (! $email) {
             Log::warning('google_auth.callback.missing_email', [
                 'is_mobile_flow' => $isMobileFlow,
+                'google_id' => $googleUser->getId(),
             ]);
             return redirect()->route('login')->with('error', __('Google account did not provide an email.'));
         }
@@ -154,13 +140,15 @@ class GoogleAuthController extends Controller
         Log::info('google_auth.callback.logged_in', [
             'is_mobile_flow' => $isMobileFlow,
             'user_id' => $user->id,
+            'email' => $email,
         ]);
 
         if ($isMobileFlow) {
             $token = Str::random(80);
-            Cache::put(self::MOBILE_TOKEN_CACHE_PREFIX.$token, (int) $user->id, now()->addMinutes(5));
+            Cache::put("mobile_google_login:{$token}", (int) $user->id, now()->addMinutes(5));
             Log::info('google_auth.callback.mobile_token_created', [
                 'user_id' => $user->id,
+                'token_preview' => $this->tokenPreview($token),
             ]);
 
             return redirect()
@@ -177,8 +165,11 @@ class GoogleAuthController extends Controller
     {
         $token = (string) $request->query('token', '');
         Log::info('google_auth.mobile_consume.start', [
+            'token_preview' => $this->tokenPreview($token),
+            'session_id' => $request->session()->getId(),
             'already_authenticated' => Auth::check(),
             'current_user_id' => Auth::id(),
+            'user_agent' => (string) $request->userAgent(),
         ]);
 
         if ($token === '') {
@@ -186,24 +177,30 @@ class GoogleAuthController extends Controller
             return redirect()->route('login')->with('error', __('Invalid mobile login token.'));
         }
 
-        $cacheKey = self::MOBILE_TOKEN_CACHE_PREFIX.$token;
+        $cacheKey = "mobile_google_login:{$token}";
         $userId = Cache::pull($cacheKey);
         Log::info('google_auth.mobile_consume.cache_lookup', [
+            'token_preview' => $this->tokenPreview($token),
             'cache_hit' => is_numeric($userId),
+            'cached_user_id' => is_numeric($userId) ? (int) $userId : null,
         ]);
 
         if (! is_numeric($userId)) {
-            Log::warning('google_auth.mobile_consume.token_expired');
+            Log::warning('google_auth.mobile_consume.token_expired', [
+                'token_preview' => $this->tokenPreview($token),
+            ]);
             return redirect()->route('login')->with('error', __('Mobile login token expired. Please try again.'));
         }
 
         $loggedIn = Auth::loginUsingId((int) $userId, remember: true);
         $request->session()->regenerate();
         Log::info('google_auth.mobile_consume.logged_in', [
+            'token_preview' => $this->tokenPreview($token),
             'target_user_id' => (int) $userId,
             'login_result' => $loggedIn,
             'authenticated_after' => Auth::check(),
             'current_user_id' => Auth::id(),
+            'session_id_after' => $request->session()->getId(),
         ]);
 
         return redirect()->route('map');
@@ -222,8 +219,10 @@ class GoogleAuthController extends Controller
             urlencode((string) $androidPackage),
         );
         Log::info('google_auth.mobile_return', [
+            'token_preview' => $this->tokenPreview($token),
             'scheme' => $scheme,
             'android_package' => $androidPackage,
+            'user_agent' => (string) $request->userAgent(),
         ]);
 
         return view('auth.google-mobile-return', [
@@ -249,4 +248,12 @@ class GoogleAuthController extends Controller
         return false;
     }
 
+    private function tokenPreview(string $token): string
+    {
+        if ($token === '') {
+            return 'empty';
+        }
+
+        return Str::substr($token, 0, 8).'...'.Str::substr($token, -6);
+    }
 }

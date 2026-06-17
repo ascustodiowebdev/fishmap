@@ -1,6 +1,6 @@
-# Fishmap
+# NautiBite
 
-Fishmap is a mobile-first navigation and fishing logbook.
+NautiBite is a mobile-first navigation and fishing logbook.
 
 It helps anglers keep practical trip records in one place:
 - fish spots with species, size, weight, bait, date/time, and privacy

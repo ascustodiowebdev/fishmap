@@ -1,15 +1,15 @@
 import { useTranslator } from '@/lib/i18n';
 import { type CatchLog, type MapBounds, type MapFocusRequest, type NavigationRoute } from '@/types';
-import { App as CapacitorApp } from '@capacitor/app';
-import { BackgroundGeolocation, type Location as BackgroundLocation } from '@capgo/background-geolocation';
 import { KeepAwake } from '@capacitor-community/keep-awake';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BackgroundGeolocation, type Location as BackgroundLocation } from '@capgo/background-geolocation';
 import L, { Icon, LeafletMouseEvent } from 'leaflet';
+import { Fish, Layers3 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap, useMapEvents, WMSTileLayer } from 'react-leaflet';
-import { Fish, Layers3 } from 'lucide-react';
 
 interface CatchMapProps {
     catchLogs: CatchLog[];
@@ -314,7 +314,11 @@ export function CatchMap({
             const rawSpeedKmh = nativeSpeedKmh ?? derivedSpeedKmh;
             let smoothedSpeedKmh = rawSpeedKmh !== null && rawSpeedKmh < SPEED_NOISE_FLOOR_KMH ? 0 : rawSpeedKmh;
 
-            if (smoothedSpeedKmh === null && lastReportedSpeedRef.current && timestamp - lastReportedSpeedRef.current.timestamp <= RECENT_SPEED_HOLD_MS) {
+            if (
+                smoothedSpeedKmh === null &&
+                lastReportedSpeedRef.current &&
+                timestamp - lastReportedSpeedRef.current.timestamp <= RECENT_SPEED_HOLD_MS
+            ) {
                 smoothedSpeedKmh = lastReportedSpeedRef.current.speedKmh;
             }
 
@@ -401,8 +405,8 @@ export function CatchMap({
             try {
                 await BackgroundGeolocation.start(
                     {
-                        backgroundTitle: 'Fishmap navigation',
-                        backgroundMessage: 'Fishmap is recording your position for navigation.',
+                        backgroundTitle: 'NautiBite navigation',
+                        backgroundMessage: 'NautiBite is recording your position for navigation.',
                         requestPermissions: true,
                         stale: false,
                         distanceFilter: 0,
@@ -765,8 +769,8 @@ export function CatchMap({
                                 {positionOverride
                                     ? t('dashboard.simulated_position')
                                     : locationAccuracy
-                                    ? t('dashboard.you_are_here_accuracy', { accuracy: locationAccuracy })
-                                    : t('dashboard.you_are_here')}
+                                      ? t('dashboard.you_are_here_accuracy', { accuracy: locationAccuracy })
+                                      : t('dashboard.you_are_here')}
                             </Popup>
                             {showDepthLayer ? (
                                 <Tooltip permanent direction="top" offset={[0, -12]}>
@@ -811,9 +815,7 @@ export function CatchMap({
                             <div className="fishmap-popup-card">
                                 <div className="space-y-1">
                                     <p className="fishmap-popup-title">{route.name}</p>
-                                    <p className="fishmap-popup-copy">
-                                        {t('dashboard.route_points', { count: route.point_count })}
-                                    </p>
+                                    <p className="fishmap-popup-copy">{t('dashboard.route_points', { count: route.point_count })}</p>
                                     {route.owner_name && !route.is_owner ? (
                                         <p className="fishmap-popup-copy">{t('dashboard.shared_by', { name: route.owner_name })}</p>
                                     ) : null}
@@ -983,7 +985,9 @@ export function CatchMap({
                                     <p className="fishmap-popup-copy">
                                         {catchLog.caught_at ? new Date(catchLog.caught_at).toLocaleString() : t('dashboard.date_not_set')}
                                     </p>
-                                    {catchLog.bait_used ? <p className="fishmap-popup-copy">{t('dashboard.bait_prefix', { bait: catchLog.bait_used })}</p> : null}
+                                    {catchLog.bait_used ? (
+                                        <p className="fishmap-popup-copy">{t('dashboard.bait_prefix', { bait: catchLog.bait_used })}</p>
+                                    ) : null}
                                     {catchLog.notes ? <p className="fishmap-popup-copy">{catchLog.notes}</p> : null}
                                 </div>
                                 {catchLog.is_owner ? (
@@ -1046,9 +1050,7 @@ export function CatchMap({
                         type="button"
                         onClick={() => setBaseLayer('street')}
                         className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                            baseLayer === 'street'
-                                ? 'bg-white text-slate-950'
-                                : 'border border-white/15 bg-slate-900/70 text-white/80'
+                            baseLayer === 'street' ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
                         }`}
                     >
                         {t('dashboard.map_street')}
@@ -1057,9 +1059,7 @@ export function CatchMap({
                         type="button"
                         onClick={() => setBaseLayer('nautical')}
                         className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                            baseLayer === 'nautical'
-                                ? 'bg-white text-slate-950'
-                                : 'border border-white/15 bg-slate-900/70 text-white/80'
+                            baseLayer === 'nautical' ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
                         }`}
                     >
                         {t('dashboard.map_nautical')}
@@ -1069,9 +1069,7 @@ export function CatchMap({
                             type="button"
                             onClick={() => setBaseLayer('satellite')}
                             className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.16em] uppercase shadow-lg backdrop-blur transition ${
-                                baseLayer === 'satellite'
-                                    ? 'bg-white text-slate-950'
-                                    : 'border border-white/15 bg-slate-900/70 text-white/80'
+                                baseLayer === 'satellite' ? 'bg-white text-slate-950' : 'border border-white/15 bg-slate-900/70 text-white/80'
                             }`}
                         >
                             {t('dashboard.map_satellite')}
@@ -1123,9 +1121,7 @@ function calculateDistanceMeters(start: [number, number], end: [number, number])
     const lat1 = toRadians(start[0]);
     const lat2 = toRadians(end[0]);
 
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
 
     return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
@@ -1298,32 +1294,41 @@ function MapClickHandler({
 }) {
     const map = useMap();
     const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pressStart = useRef<{ position: [number, number]; pointX: number; pointY: number; moved: boolean; pointerType: 'mouse' | 'touch' | 'pen' } | null>(null);
+    const pressStart = useRef<{
+        position: [number, number];
+        pointX: number;
+        pointY: number;
+        moved: boolean;
+        pointerType: 'mouse' | 'touch' | 'pen';
+    } | null>(null);
     const longPressTriggered = useRef(false);
 
-    const beginHold = useCallback((position: [number, number], pointX: number, pointY: number, pointerType: 'mouse' | 'touch' | 'pen') => {
-        if (holdTimer.current) {
-            clearTimeout(holdTimer.current);
-        }
-
-        pressStart.current = {
-            position,
-            pointX,
-            pointY,
-            moved: false,
-            pointerType,
-        };
-        longPressTriggered.current = false;
-
-        holdTimer.current = setTimeout(() => {
-            if (!pressStart.current || pressStart.current.moved) {
-                return;
+    const beginHold = useCallback(
+        (position: [number, number], pointX: number, pointY: number, pointerType: 'mouse' | 'touch' | 'pen') => {
+            if (holdTimer.current) {
+                clearTimeout(holdTimer.current);
             }
 
-            longPressTriggered.current = true;
-            onLongPress(pressStart.current.position);
-        }, 1000);
-    }, [onLongPress]);
+            pressStart.current = {
+                position,
+                pointX,
+                pointY,
+                moved: false,
+                pointerType,
+            };
+            longPressTriggered.current = false;
+
+            holdTimer.current = setTimeout(() => {
+                if (!pressStart.current || pressStart.current.moved) {
+                    return;
+                }
+
+                longPressTriggered.current = true;
+                onLongPress(pressStart.current.position);
+            }, 1000);
+        },
+        [onLongPress],
+    );
 
     const cancelHold = useCallback(() => {
         if (holdTimer.current) {
@@ -1342,11 +1347,7 @@ function MapClickHandler({
                 return false;
             }
 
-            return Boolean(
-                target.closest(
-                    '.leaflet-marker-icon, .leaflet-popup, .leaflet-control, .leaflet-interactive, .leaflet-marker-pane',
-                ),
-            );
+            return Boolean(target.closest('.leaflet-marker-icon, .leaflet-popup, .leaflet-control, .leaflet-interactive, .leaflet-marker-pane'));
         };
 
         const startFromPointer = (clientX: number, clientY: number, target: EventTarget | null, pointerType: 'mouse' | 'touch' | 'pen') => {

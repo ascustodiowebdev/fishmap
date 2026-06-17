@@ -26,7 +26,6 @@ Route::middleware('guest')->group(function () {
         ->name('password.request');
 
     Route::post('forgot-password', [PasswordResetLinkController::class, 'store'])
-        ->middleware('throttle:6,1')
         ->name('password.email');
 
     Route::get('reset-password/{token}', [NewPasswordController::class, 'create'])
@@ -61,13 +60,10 @@ Route::get('auth/google/mobile-return', [GoogleAuthController::class, 'mobileRet
     ->name('auth.google.mobile.return');
 
 Route::get('auth/google/redirect', [GoogleAuthController::class, 'redirect'])
-    ->middleware('throttle:20,1')
     ->name('auth.google.redirect');
 
 Route::get('auth/google/callback', [GoogleAuthController::class, 'callback'])
-    ->middleware('throttle:20,1')
     ->name('auth.google.callback');
 
 Route::get('auth/google/mobile-consume', [GoogleAuthController::class, 'consumeMobileToken'])
-    ->middleware('throttle:20,1')
     ->name('auth.google.mobile.consume');

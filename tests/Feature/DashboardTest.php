@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BugReport;
 use App\Models\CatchLog;
 use App\Models\NavigationRoute;
 use App\Models\User;
@@ -136,6 +137,75 @@ class DashboardTest extends TestCase
 
         $this->assertTrue($user->refresh()->isPro());
         $this->assertNotNull($user->pro_expires_at);
+    }
+
+    public function test_authenticated_users_can_report_bugs()
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->from('/map')
+            ->post(route('bug-reports.store'), [
+                'category' => 'gps',
+                'subject' => 'Speed jumps while recording',
+                'message' => 'The speed briefly drops to zero and the route skips a section.',
+                'client_platform' => 'android',
+                'client_context' => '/map 430x932',
+                'website' => '',
+            ])
+            ->assertRedirect('/map')
+            ->assertSessionHas('success');
+
+        $report = BugReport::query()->sole();
+
+        $this->assertSame($user->id, $report->user_id);
+        $this->assertSame('gps', $report->category);
+        $this->assertSame('open', $report->status);
+        $this->assertNotNull($report->ip_hash);
+    }
+
+    public function test_bug_report_honeypot_does_not_store_report()
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->from('/map')
+            ->post(route('bug-reports.store'), [
+                'category' => 'bug',
+                'subject' => 'Bot report',
+                'message' => 'This should be silently ignored.',
+                'website' => 'https://spam.example',
+            ])
+            ->assertRedirect('/map')
+            ->assertSessionHas('success');
+
+        $this->assertSame(0, BugReport::query()->count());
+    }
+
+    public function test_admin_can_respond_to_bug_report()
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $user = User::factory()->create();
+        $report = BugReport::query()->create([
+            'user_id' => $user->id,
+            'category' => 'bug',
+            'subject' => 'Map issue',
+            'message' => 'Tiles loaded slowly on mobile.',
+        ]);
+
+        $this->actingAs($admin)
+            ->patch(route('admin.bug-reports.update', $report), [
+                'status' => 'fixed',
+                'admin_response' => 'Fixed in the latest build.',
+            ])
+            ->assertSessionHas('success');
+
+        $report->refresh();
+
+        $this->assertSame('fixed', $report->status);
+        $this->assertSame('Fixed in the latest build.', $report->admin_response);
+        $this->assertSame($admin->id, $report->admin_responder_id);
+        $this->assertNotNull($report->admin_responded_at);
     }
 
     private function catchPayload(): array
