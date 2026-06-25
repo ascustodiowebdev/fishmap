@@ -6,6 +6,7 @@ import { SidebarTrigger } from '@/components/ui/sidebar';
 import AppLayout from '@/layouts/app-layout';
 import { useTranslator } from '@/lib/i18n';
 import { type BreadcrumbItem, type CatchLog, type MapFocusRequest, type NavigationRoute, type SharedData } from '@/types';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
@@ -76,6 +77,22 @@ type CatchFlowStep = 'action' | 'location-mode' | 'confirm-location' | 'details'
 type RouteDialogMode = 'create' | 'edit' | 'delete' | null;
 type LibraryDialogMode = 'spots' | 'routes' | null;
 
+interface ActiveRoutePoint {
+    [key: string]: number | string;
+    latitude: number;
+    longitude: number;
+    recorded_at: string;
+}
+
+interface RouteRecordingDraft {
+    version: 1;
+    is_recording: boolean;
+    visibility: 'private' | 'public';
+    started_at: string;
+    points: ActiveRoutePoint[];
+    saved_at: string;
+}
+
 interface RouteGuidanceMetrics {
     nearestPoint: [number, number];
     offCourseMeters: number;
@@ -111,6 +128,7 @@ const MIN_ROUTE_POINT_DISTANCE_METERS = 3;
 const MAX_REASONABLE_ROUTE_SPEED_KMH = 220;
 const MAX_ROUTE_ACCURACY_FOR_MOVING_METERS = 120;
 const SAFETY_NOTICE_STORAGE_KEY = 'fishmap.safety-privacy-ack.v1';
+const ROUTE_RECORDING_DRAFT_STORAGE_KEY = 'nautibite.route-recording-draft.v1';
 
 export default function Dashboard({ catchLogs, navigationRoutes, bugReports, subscription }: DashboardProps) {
     const { flash, auth } = usePage<SharedData>().props;
@@ -146,7 +164,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
     const [routeSimulationEnabled, setRouteSimulationEnabled] = useState(false);
     const [recordingVisibility, setRecordingVisibility] = useState<'private' | 'public'>('private');
     const [recordingStartedAt, setRecordingStartedAt] = useState<string | null>(null);
-    const [activeRoutePoints, setActiveRoutePoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
+    const [activeRoutePoints, setActiveRoutePoints] = useState<ActiveRoutePoint[]>([]);
     const [simulatedPosition, setSimulatedPosition] = useState<[number, number] | null>(null);
     const [routeDialogOpen, setRouteDialogOpen] = useState(false);
     const [routeDialogMode, setRouteDialogMode] = useState<RouteDialogMode>(null);
@@ -181,11 +199,12 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
     const [bugReportDialogOpen, setBugReportDialogOpen] = useState(false);
     const [isSubmittingBugReport, setIsSubmittingBugReport] = useState(false);
     const [routeEditModeRouteId, setRouteEditModeRouteId] = useState<number | null>(null);
-    const [routeEditDraftPoints, setRouteEditDraftPoints] = useState<Array<{ latitude: number; longitude: number; recorded_at: string }>>([]);
+    const [routeEditDraftPoints, setRouteEditDraftPoints] = useState<ActiveRoutePoint[]>([]);
     const [routeEditSelection, setRouteEditSelection] = useState<[number, number] | null>(null);
     const [routeEditDrawPoints, setRouteEditDrawPoints] = useState<[number, number][]>([]);
     const [safetyNoticeOpen, setSafetyNoticeOpen] = useState(false);
     const safetyNoticeAcceptedRef = useRef(false);
+    const routeRecordingDraftLoadedRef = useRef(false);
 
     useEffect(() => {
         setSatelliteSecondsUsed(subscription.usage.satellite_seconds);
@@ -552,6 +571,115 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
         [recordingVisibility, routeForm],
     );
 
+    useEffect(() => {
+        if (routeRecordingDraftLoadedRef.current) {
+            return;
+        }
+
+        routeRecordingDraftLoadedRef.current = true;
+        const draft = readRouteRecordingDraft();
+        if (!draft) {
+            return;
+        }
+
+        setActiveRoutePoints(draft.points);
+        setRecordingStartedAt(draft.started_at);
+        setRecordingVisibility(draft.visibility);
+        setActiveRoute(null);
+        setRouteSubmitError(null);
+
+        if (draft.is_recording) {
+            setIsRecordingRoute(true);
+            setSubmitError(t('dashboard.route_recording_restored'));
+            return;
+        }
+
+        if (draft.points.length >= 2) {
+            const lastPoint = draft.points.at(-1);
+            setRouteDialogMode('create');
+            setRouteDialogOpen(true);
+            populateRouteForm(null, draft.started_at, lastPoint?.recorded_at ?? draft.saved_at);
+            setRouteSubmitError(t('dashboard.route_recording_recovered'));
+        }
+    }, [populateRouteForm, t]);
+
+    useEffect(() => {
+        if (!routeRecordingDraftLoadedRef.current || !recordingStartedAt || activeRoutePoints.length === 0) {
+            return;
+        }
+
+        const timeout = window.setTimeout(() => {
+            writeRouteRecordingDraft({
+                version: 1,
+                is_recording: isRecordingRoute,
+                visibility: recordingVisibility,
+                started_at: recordingStartedAt,
+                points: activeRoutePoints,
+                saved_at: new Date().toISOString(),
+            });
+        }, 250);
+
+        return () => window.clearTimeout(timeout);
+    }, [activeRoutePoints, isRecordingRoute, recordingStartedAt, recordingVisibility]);
+
+    useEffect(() => {
+        if (!isRecordingRoute) {
+            return;
+        }
+
+        const message = t('dashboard.route_recording_exit_confirm');
+        const stopNavigation = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = message;
+            return message;
+        };
+
+        window.addEventListener('beforeunload', stopNavigation);
+
+        return () => window.removeEventListener('beforeunload', stopNavigation);
+    }, [isRecordingRoute, t]);
+
+    useEffect(() => {
+        if (!isRecordingRoute) {
+            return;
+        }
+
+        const message = t('dashboard.route_recording_exit_confirm');
+        const removeBeforeListener = router.on('before', (event) => {
+            if (!window.confirm(message)) {
+                event.preventDefault();
+            }
+        });
+
+        return () => removeBeforeListener();
+    }, [isRecordingRoute, t]);
+
+    useEffect(() => {
+        if (!Capacitor.isNativePlatform()) {
+            return;
+        }
+
+        const listenerPromise = CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+            if (isRecordingRoute) {
+                if (window.confirm(t('dashboard.route_recording_exit_confirm'))) {
+                    void CapacitorApp.exitApp();
+                }
+                return;
+            }
+
+            if (canGoBack) {
+                window.history.back();
+                return;
+            }
+
+            void CapacitorApp.exitApp();
+        });
+
+        return () => {
+            void listenerPromise.then((listener) => listener.remove());
+        };
+    }, [isRecordingRoute, t]);
+
     const populateForm = useCallback(
         (catchLog?: CatchLog | null) => {
             if (!catchLog) {
@@ -890,6 +1018,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
             setIsRecordingRoute(false);
             setActiveRoutePoints([]);
             setRecordingStartedAt(null);
+            clearRouteRecordingDraft();
             return;
         }
 
@@ -1114,6 +1243,7 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
     );
 
     const resetRouteDraft = useCallback(() => {
+        clearRouteRecordingDraft();
         setActiveRoutePoints([]);
         setRecordingStartedAt(null);
         setRouteDialogMode(null);
@@ -3057,6 +3187,74 @@ export default function Dashboard({ catchLogs, navigationRoutes, bugReports, sub
             </div>
         </AppLayout>
     );
+}
+
+function readRouteRecordingDraft(): RouteRecordingDraft | null {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    try {
+        const rawDraft = window.localStorage.getItem(ROUTE_RECORDING_DRAFT_STORAGE_KEY);
+        if (!rawDraft) {
+            return null;
+        }
+
+        const parsed = JSON.parse(rawDraft) as Partial<RouteRecordingDraft>;
+        const points = Array.isArray(parsed.points)
+            ? parsed.points
+                  .map((point) => ({
+                      latitude: Number(point.latitude),
+                      longitude: Number(point.longitude),
+                      recorded_at: String(point.recorded_at ?? ''),
+                  }))
+                  .filter(
+                      (point) =>
+                          Number.isFinite(point.latitude) &&
+                          Number.isFinite(point.longitude) &&
+                          !Number.isNaN(new Date(point.recorded_at).getTime()),
+                  )
+            : [];
+
+        if (parsed.version !== 1 || !parsed.started_at || Number.isNaN(new Date(parsed.started_at).getTime()) || points.length === 0) {
+            return null;
+        }
+
+        return {
+            version: 1,
+            is_recording: Boolean(parsed.is_recording),
+            visibility: parsed.visibility === 'public' ? 'public' : 'private',
+            started_at: parsed.started_at,
+            points,
+            saved_at: typeof parsed.saved_at === 'string' ? parsed.saved_at : new Date().toISOString(),
+        };
+    } catch {
+        return null;
+    }
+}
+
+function writeRouteRecordingDraft(draft: RouteRecordingDraft): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(ROUTE_RECORDING_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch {
+        // A full localStorage should not break live GPS recording.
+    }
+}
+
+function clearRouteRecordingDraft(): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage.removeItem(ROUTE_RECORDING_DRAFT_STORAGE_KEY);
+    } catch {
+        // Nothing useful to do if the browser refuses storage cleanup.
+    }
 }
 
 function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {

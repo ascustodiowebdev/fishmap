@@ -49,6 +49,7 @@
         <service
             android:name="com.capgo.capacitor_background_geolocation.BackgroundGeolocationService"
             android:exported="false"
+            android:stopWithTask="false"
             tools:replace="android:exported" />
     </application>
 

@@ -242,6 +242,10 @@ const translations = {
         'dashboard.route_recording': 'Route recording',
         'dashboard.route_recording_idle': 'Start a route or enable simulation to test at home.',
         'dashboard.route_recording_live': 'Recording live. {count} points captured.',
+        'dashboard.route_recording_exit_confirm':
+            'A route recording is still active. Leave anyway? Your points are kept locally until you save or cancel.',
+        'dashboard.route_recording_restored': 'Restored an active route recording from this device.',
+        'dashboard.route_recording_recovered': 'Recovered points from an interrupted recording. Confirm and save the route.',
         'dashboard.simulation': 'Simulate',
         'dashboard.simulation_controls': 'Click on the map to move the simulated GPS point.',
         'dashboard.simulation_click_move': 'Click on the map to move the simulated GPS point.',
@@ -537,6 +541,10 @@ const translations = {
         'dashboard.route_recording': 'Gravação de rota',
         'dashboard.route_recording_idle': 'Começa uma rota ou ativa a simulação para testar em casa.',
         'dashboard.route_recording_live': 'A gravar em direto. {count} pontos capturados.',
+        'dashboard.route_recording_exit_confirm':
+            'Ha uma gravacao de rota ativa. Queres mesmo sair? Os pontos ficam guardados localmente ate guardares ou cancelares.',
+        'dashboard.route_recording_restored': 'Recuperei uma gravacao de rota em curso guardada neste dispositivo.',
+        'dashboard.route_recording_recovered': 'Recuperei pontos de uma gravacao interrompida. Confirma e guarda a rota.',
         'dashboard.simulation': 'Simular',
         'dashboard.simulation_controls': 'Clica no mapa para mover o ponto GPS simulado.',
         'dashboard.simulation_click_move': 'Clica no mapa para mover o ponto GPS simulado.',

@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 
 class NavigationRouteController extends Controller
 {
-    private const MAX_ROUTE_POINTS = 6000;
+    private const MAX_ROUTE_POINTS = 25000;
     private const DEFAULT_FREE_ROUTE_LIMIT = 3;
 
     public function store(Request $request): RedirectResponse
